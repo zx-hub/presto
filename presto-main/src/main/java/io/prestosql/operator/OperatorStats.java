@@ -61,6 +61,8 @@ public class OperatorStats
     private final DataSize outputDataSize;
     private final long outputPositions;
 
+    private final long dynamicFilterSplitsProcessed;
+
     private final DataSize physicalWrittenDataSize;
 
     private final Duration blockedWall;
@@ -74,6 +76,7 @@ public class OperatorStats
     private final DataSize systemMemoryReservation;
     private final DataSize peakUserMemoryReservation;
     private final DataSize peakSystemMemoryReservation;
+    private final DataSize peakRevocableMemoryReservation;
     private final DataSize peakTotalMemoryReservation;
 
     private final DataSize spilledDataSize;
@@ -110,6 +113,8 @@ public class OperatorStats
             @JsonProperty("outputDataSize") DataSize outputDataSize,
             @JsonProperty("outputPositions") long outputPositions,
 
+            @JsonProperty("dynamicFilterSplitsProcessed") long dynamicFilterSplitsProcessed,
+
             @JsonProperty("physicalWrittenDataSize") DataSize physicalWrittenDataSize,
 
             @JsonProperty("blockedWall") Duration blockedWall,
@@ -123,6 +128,7 @@ public class OperatorStats
             @JsonProperty("systemMemoryReservation") DataSize systemMemoryReservation,
             @JsonProperty("peakUserMemoryReservation") DataSize peakUserMemoryReservation,
             @JsonProperty("peakSystemMemoryReservation") DataSize peakSystemMemoryReservation,
+            @JsonProperty("peakRevocableMemoryReservation") DataSize peakRevocableMemoryReservation,
             @JsonProperty("peakTotalMemoryReservation") DataSize peakTotalMemoryReservation,
 
             @JsonProperty("spilledDataSize") DataSize spilledDataSize,
@@ -161,6 +167,8 @@ public class OperatorStats
         checkArgument(outputPositions >= 0, "outputPositions is negative");
         this.outputPositions = outputPositions;
 
+        this.dynamicFilterSplitsProcessed = dynamicFilterSplitsProcessed;
+
         this.physicalWrittenDataSize = requireNonNull(physicalWrittenDataSize, "writtenDataSize is null");
 
         this.blockedWall = requireNonNull(blockedWall, "blockedWall is null");
@@ -175,6 +183,7 @@ public class OperatorStats
 
         this.peakUserMemoryReservation = requireNonNull(peakUserMemoryReservation, "peakUserMemoryReservation is null");
         this.peakSystemMemoryReservation = requireNonNull(peakSystemMemoryReservation, "peakSystemMemoryReservation is null");
+        this.peakRevocableMemoryReservation = requireNonNull(peakRevocableMemoryReservation, "peakRevocableMemoryReservation is null");
         this.peakTotalMemoryReservation = requireNonNull(peakTotalMemoryReservation, "peakTotalMemoryReservation is null");
 
         this.spilledDataSize = requireNonNull(spilledDataSize, "spilledDataSize is null");
@@ -317,6 +326,12 @@ public class OperatorStats
     }
 
     @JsonProperty
+    public long getDynamicFilterSplitsProcessed()
+    {
+        return dynamicFilterSplitsProcessed;
+    }
+
+    @JsonProperty
     public DataSize getPhysicalWrittenDataSize()
     {
         return physicalWrittenDataSize;
@@ -368,6 +383,12 @@ public class OperatorStats
     public DataSize getPeakUserMemoryReservation()
     {
         return peakUserMemoryReservation;
+    }
+
+    @JsonProperty
+    public DataSize getPeakRevocableMemoryReservation()
+    {
+        return peakRevocableMemoryReservation;
     }
 
     @JsonProperty
@@ -428,6 +449,8 @@ public class OperatorStats
         long outputDataSize = this.outputDataSize.toBytes();
         long outputPositions = this.outputPositions;
 
+        long dynamicFilterSplitsProcessed = this.dynamicFilterSplitsProcessed;
+
         long physicalWrittenDataSize = this.physicalWrittenDataSize.toBytes();
 
         long blockedWall = this.blockedWall.roundTo(NANOSECONDS);
@@ -441,6 +464,7 @@ public class OperatorStats
         long systemMemoryReservation = this.systemMemoryReservation.toBytes();
         long peakUserMemory = this.peakUserMemoryReservation.toBytes();
         long peakSystemMemory = this.peakSystemMemoryReservation.toBytes();
+        long peakRevocableMemory = this.peakRevocableMemoryReservation.toBytes();
         long peakTotalMemory = this.peakTotalMemoryReservation.toBytes();
 
         long spilledDataSize = this.spilledDataSize.toBytes();
@@ -471,6 +495,8 @@ public class OperatorStats
             outputDataSize += operator.getOutputDataSize().toBytes();
             outputPositions += operator.getOutputPositions();
 
+            dynamicFilterSplitsProcessed += operator.getDynamicFilterSplitsProcessed();
+
             physicalWrittenDataSize += operator.getPhysicalWrittenDataSize().toBytes();
 
             finishCalls += operator.getFinishCalls();
@@ -485,6 +511,7 @@ public class OperatorStats
 
             peakUserMemory = max(peakUserMemory, operator.getPeakUserMemoryReservation().toBytes());
             peakSystemMemory = max(peakSystemMemory, operator.getPeakSystemMemoryReservation().toBytes());
+            peakRevocableMemory = max(peakRevocableMemory, operator.getPeakRevocableMemoryReservation().toBytes());
             peakTotalMemory = max(peakTotalMemory, operator.getPeakTotalMemoryReservation().toBytes());
 
             spilledDataSize += operator.getSpilledDataSize().toBytes();
@@ -526,6 +553,8 @@ public class OperatorStats
                 succinctBytes(outputDataSize),
                 outputPositions,
 
+                dynamicFilterSplitsProcessed,
+
                 succinctBytes(physicalWrittenDataSize),
 
                 new Duration(blockedWall, NANOSECONDS).convertToMostSuccinctTimeUnit(),
@@ -539,6 +568,7 @@ public class OperatorStats
                 succinctBytes(systemMemoryReservation),
                 succinctBytes(peakUserMemory),
                 succinctBytes(peakSystemMemory),
+                succinctBytes(peakRevocableMemory),
                 succinctBytes(peakTotalMemory),
 
                 succinctBytes(spilledDataSize),
@@ -589,6 +619,7 @@ public class OperatorStats
                 getOutputCpu,
                 outputDataSize,
                 outputPositions,
+                dynamicFilterSplitsProcessed,
                 physicalWrittenDataSize,
                 blockedWall,
                 finishCalls,
@@ -599,6 +630,7 @@ public class OperatorStats
                 systemMemoryReservation,
                 peakUserMemoryReservation,
                 peakSystemMemoryReservation,
+                peakRevocableMemoryReservation,
                 peakTotalMemoryReservation,
                 spilledDataSize,
                 blockedReason,

@@ -31,30 +31,26 @@ import static java.util.Objects.requireNonNull;
 public final class ScalarFunctionImplementation
 {
     private final List<ScalarImplementationChoice> choices;
-    private final boolean deterministic;
 
     public ScalarFunctionImplementation(
             boolean nullable,
             List<ArgumentProperty> argumentProperties,
-            MethodHandle methodHandle,
-            boolean deterministic)
+            MethodHandle methodHandle)
     {
         this(
                 nullable,
                 argumentProperties,
                 methodHandle,
-                Optional.empty(),
-                deterministic);
+                Optional.empty());
     }
 
     public ScalarFunctionImplementation(
             boolean nullable,
             List<ArgumentProperty> argumentProperties,
             MethodHandle methodHandle,
-            Optional<MethodHandle> instanceFactory,
-            boolean deterministic)
+            Optional<MethodHandle> instanceFactory)
     {
-        this(ImmutableList.of(new ScalarImplementationChoice(nullable, argumentProperties, methodHandle, instanceFactory)), deterministic);
+        this(ImmutableList.of(new ScalarImplementationChoice(nullable, argumentProperties, methodHandle, instanceFactory)));
     }
 
     /**
@@ -66,21 +62,20 @@ public final class ScalarFunctionImplementation
      *
      * @param choices the list of choices, ordered from generic to specific
      */
-    public ScalarFunctionImplementation(List<ScalarImplementationChoice> choices, boolean deterministic)
+    public ScalarFunctionImplementation(List<ScalarImplementationChoice> choices)
     {
         checkArgument(!choices.isEmpty(), "choices is an empty list");
         this.choices = ImmutableList.copyOf(choices);
-        this.deterministic = deterministic;
-    }
-
-    public boolean isNullable()
-    {
-        return choices.get(0).isNullable();
     }
 
     public ArgumentProperty getArgumentProperty(int argumentIndex)
     {
-        return choices.get(0).argumentProperties.get(argumentIndex);
+        return getArgumentProperties().get(argumentIndex);
+    }
+
+    public List<ArgumentProperty> getArgumentProperties()
+    {
+        return choices.get(0).argumentProperties;
     }
 
     public MethodHandle getMethodHandle()
@@ -96,11 +91,6 @@ public final class ScalarFunctionImplementation
     public List<ScalarImplementationChoice> getAllChoices()
     {
         return choices;
-    }
-
-    public boolean isDeterministic()
-    {
-        return deterministic;
     }
 
     public static class ScalarImplementationChoice
@@ -132,7 +122,7 @@ public final class ScalarFunctionImplementation
             boolean hasSession = false;
             if (parameterList.contains(ConnectorSession.class)) {
                 checkArgument(parameterList.stream().filter(ConnectorSession.class::equals).count() == 1, "function implementation should have exactly one ConnectorSession parameter");
-                if (!instanceFactory.isPresent()) {
+                if (instanceFactory.isEmpty()) {
                     checkArgument(parameterList.get(0) == ConnectorSession.class, "ConnectorSession must be the first argument when instanceFactory is not present");
                 }
                 else {
@@ -179,27 +169,27 @@ public final class ScalarFunctionImplementation
         // TODO: Alternatively, we can store io.prestosql.spi.type.Type
         private final ArgumentType argumentType;
         private final Optional<NullConvention> nullConvention;
-        private final Optional<Class> lambdaInterface;
+        private final Optional<Class<?>> lambdaInterface;
 
         public static ArgumentProperty valueTypeArgumentProperty(NullConvention nullConvention)
         {
             return new ArgumentProperty(VALUE_TYPE, Optional.of(nullConvention), Optional.empty());
         }
 
-        public static ArgumentProperty functionTypeArgumentProperty(Class lambdaInterface)
+        public static ArgumentProperty functionTypeArgumentProperty(Class<?> lambdaInterface)
         {
             return new ArgumentProperty(FUNCTION_TYPE, Optional.empty(), Optional.of(lambdaInterface));
         }
 
-        public ArgumentProperty(ArgumentType argumentType, Optional<NullConvention> nullConvention, Optional<Class> lambdaInterface)
+        public ArgumentProperty(ArgumentType argumentType, Optional<NullConvention> nullConvention, Optional<Class<?>> lambdaInterface)
         {
             switch (argumentType) {
                 case VALUE_TYPE:
                     checkArgument(nullConvention.isPresent(), "nullConvention must present for value type");
-                    checkArgument(!lambdaInterface.isPresent(), "lambdaInterface must not present for value type");
+                    checkArgument(lambdaInterface.isEmpty(), "lambdaInterface must not present for value type");
                     break;
                 case FUNCTION_TYPE:
-                    checkArgument(!nullConvention.isPresent(), "nullConvention must not present for function type");
+                    checkArgument(nullConvention.isEmpty(), "nullConvention must not present for function type");
                     checkArgument(lambdaInterface.isPresent(), "lambdaInterface must present for function type");
                     checkArgument(lambdaInterface.get().isAnnotationPresent(FunctionalInterface.class), "lambdaInterface must be annotated with FunctionalInterface");
                     break;
@@ -223,10 +213,9 @@ public final class ScalarFunctionImplementation
             return nullConvention.get();
         }
 
-        public Class getLambdaInterface()
+        public Optional<Class<?>> getLambdaInterface()
         {
-            checkState(getArgumentType() == FUNCTION_TYPE, "lambdaInterface only applies to function type argument");
-            return lambdaInterface.get();
+            return lambdaInterface;
         }
 
         @Override

@@ -20,7 +20,6 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import io.airlift.json.JsonCodec;
 import io.airlift.units.Duration;
-import io.prestosql.client.OkHttpUtil.NullCallback;
 import okhttp3.Headers;
 import okhttp3.HttpUrl;
 import okhttp3.MediaType;
@@ -31,6 +30,7 @@ import okhttp3.RequestBody;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URLDecoder;
@@ -177,12 +177,12 @@ class StatementClientV1
 
         Map<String, String> property = session.getProperties();
         for (Entry<String, String> entry : property.entrySet()) {
-            builder.addHeader(PRESTO_SESSION, entry.getKey() + "=" + entry.getValue());
+            builder.addHeader(PRESTO_SESSION, entry.getKey() + "=" + urlEncode(entry.getValue()));
         }
 
         Map<String, String> resourceEstimates = session.getResourceEstimates();
         for (Entry<String, String> entry : resourceEstimates.entrySet()) {
-            builder.addHeader(PRESTO_RESOURCE_ESTIMATE, entry.getKey() + "=" + entry.getValue());
+            builder.addHeader(PRESTO_RESOURCE_ESTIMATE, entry.getKey() + "=" + urlEncode(entry.getValue()));
         }
 
         Map<String, ClientSelectedRole> roles = session.getRoles();
@@ -192,7 +192,7 @@ class StatementClientV1
 
         Map<String, String> extraCredentials = session.getExtraCredentials();
         for (Entry<String, String> entry : extraCredentials.entrySet()) {
-            builder.addHeader(PRESTO_EXTRA_CREDENTIAL, entry.getKey() + "=" + entry.getValue());
+            builder.addHeader(PRESTO_EXTRA_CREDENTIAL, entry.getKey() + "=" + urlEncode(entry.getValue()));
         }
 
         Map<String, String> statements = session.getPreparedStatements();
@@ -219,21 +219,25 @@ class StatementClientV1
         return timeZone;
     }
 
+    @Override
     public boolean isRunning()
     {
         return state.get() == State.RUNNING;
     }
 
+    @Override
     public boolean isClientAborted()
     {
         return state.get() == State.CLIENT_ABORTED;
     }
 
+    @Override
     public boolean isClientError()
     {
         return state.get() == State.CLIENT_ERROR;
     }
 
+    @Override
     public boolean isFinished()
     {
         return state.get() == State.FINISHED;
@@ -248,7 +252,6 @@ class StatementClientV1
     @Override
     public QueryStatusInfo currentStatusInfo()
     {
-        checkState(isRunning(), "current position is not valid (cursor past end)");
         return currentResults.get();
     }
 
@@ -415,7 +418,7 @@ class StatementClientV1
             if (keyValue.size() != 2) {
                 continue;
             }
-            setSessionProperties.put(keyValue.get(0), keyValue.get(1));
+            setSessionProperties.put(keyValue.get(0), urlDecode(keyValue.get(1)));
         }
         resetSessionProperties.addAll(headers.values(PRESTO_CLEAR_SESSION));
 
@@ -493,7 +496,14 @@ class StatementClientV1
         Request request = prepareRequest(HttpUrl.get(uri))
                 .delete()
                 .build();
-        httpClient.newCall(request).enqueue(new NullCallback());
+        try {
+            httpClient.newCall(request)
+                    .execute()
+                    .close();
+        }
+        catch (IOException ignored) {
+            // callers expect this method not to throw
+        }
     }
 
     private static String urlEncode(String value)

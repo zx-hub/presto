@@ -13,7 +13,6 @@
  */
 package io.prestosql.orc;
 
-import com.google.common.base.Strings;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ContiguousSet;
 import com.google.common.collect.DiscreteDomain;
@@ -23,7 +22,9 @@ import io.prestosql.spi.type.CharType;
 import io.prestosql.spi.type.DecimalType;
 import io.prestosql.spi.type.SqlDate;
 import io.prestosql.spi.type.SqlDecimal;
+import io.prestosql.spi.type.SqlTimestamp;
 import io.prestosql.spi.type.SqlVarbinary;
+import io.prestosql.spi.type.TimeZoneKey;
 import org.joda.time.DateTimeZone;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
@@ -43,6 +44,7 @@ import static io.prestosql.orc.OrcTester.HIVE_STORAGE_TIME_ZONE;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
 import static io.prestosql.spi.type.CharType.createCharType;
+import static io.prestosql.spi.type.Chars.padSpaces;
 import static io.prestosql.spi.type.DateType.DATE;
 import static io.prestosql.spi.type.DoubleType.DOUBLE;
 import static io.prestosql.spi.type.IntegerType.INTEGER;
@@ -233,6 +235,44 @@ public abstract class AbstractTestOrcReader
         tester.testRoundTrip(DECIMAL_TYPE_PRECISION_17, decimalSequence("-30000000000", "1000000", 60_000, 17, 8));
         tester.testRoundTrip(DECIMAL_TYPE_PRECISION_18, decimalSequence("-30000000000", "1000000", 60_000, 18, 8));
         tester.testRoundTrip(DECIMAL_TYPE_PRECISION_38, decimalSequence("-3000000000000000000", "100000000000000", 60_000, 38, 16));
+
+        Random random = new Random(0);
+        List<SqlDecimal> values = new ArrayList<>();
+        values.add(new SqlDecimal(new BigInteger("9".repeat(18)), DECIMAL_TYPE_PRECISION_18.getPrecision(), DECIMAL_TYPE_PRECISION_18.getScale()));
+        values.add(new SqlDecimal(new BigInteger("-" + "9".repeat(18)), DECIMAL_TYPE_PRECISION_18.getPrecision(), DECIMAL_TYPE_PRECISION_18.getScale()));
+        BigInteger nextValue = BigInteger.ONE;
+        for (int i = 0; i < 59; i++) {
+            values.add(new SqlDecimal(nextValue, DECIMAL_TYPE_PRECISION_18.getPrecision(), DECIMAL_TYPE_PRECISION_18.getScale()));
+            values.add(new SqlDecimal(nextValue.negate(), DECIMAL_TYPE_PRECISION_18.getPrecision(), DECIMAL_TYPE_PRECISION_18.getScale()));
+            nextValue = nextValue.multiply(BigInteger.valueOf(2));
+        }
+        for (int i = 0; i < 100_000; ++i) {
+            BigInteger value = new BigInteger(59, random);
+            if (random.nextBoolean()) {
+                value = value.negate();
+            }
+            values.add(new SqlDecimal(value, DECIMAL_TYPE_PRECISION_18.getPrecision(), DECIMAL_TYPE_PRECISION_18.getScale()));
+        }
+        tester.testRoundTrip(DECIMAL_TYPE_PRECISION_18, values);
+
+        random = new Random(0);
+        values = new ArrayList<>();
+        values.add(new SqlDecimal(new BigInteger("9".repeat(38)), DECIMAL_TYPE_PRECISION_38.getPrecision(), DECIMAL_TYPE_PRECISION_38.getScale()));
+        values.add(new SqlDecimal(new BigInteger("-" + "9".repeat(38)), DECIMAL_TYPE_PRECISION_38.getPrecision(), DECIMAL_TYPE_PRECISION_38.getScale()));
+        nextValue = BigInteger.ONE;
+        for (int i = 0; i < 127; i++) {
+            values.add(new SqlDecimal(nextValue, 38, 16));
+            values.add(new SqlDecimal(nextValue.negate(), 38, 16));
+            nextValue = nextValue.multiply(BigInteger.valueOf(2));
+        }
+        for (int i = 0; i < 100_000; ++i) {
+            BigInteger value = new BigInteger(126, random);
+            if (random.nextBoolean()) {
+                value = value.negate();
+            }
+            values.add(new SqlDecimal(value, DECIMAL_TYPE_PRECISION_38.getPrecision(), DECIMAL_TYPE_PRECISION_38.getScale()));
+        }
+        tester.testRoundTrip(DECIMAL_TYPE_PRECISION_38, values);
     }
 
     @Test
@@ -247,6 +287,20 @@ public abstract class AbstractTestOrcReader
         tester.testRoundTrip(DOUBLE, ImmutableList.of(Double.NaN, -1.0, Double.POSITIVE_INFINITY));
         tester.testRoundTrip(DOUBLE, ImmutableList.of(Double.NaN, Double.NEGATIVE_INFINITY, 1.0));
         tester.testRoundTrip(DOUBLE, ImmutableList.of(Double.NaN, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY));
+    }
+
+    @Test
+    public void testLegacyTimestamp()
+            throws Exception
+    {
+        @SuppressWarnings("deprecation")
+        List<SqlTimestamp> values = ImmutableList.of(
+                SqlTimestamp.legacyFromMillis(3, 0, TimeZoneKey.UTC_KEY),
+                SqlTimestamp.legacyFromMillis(3, 10, TimeZoneKey.UTC_KEY),
+                SqlTimestamp.legacyFromMillis(3, 1123456789L, TimeZoneKey.UTC_KEY), // 1970-01-14T00:04:16.789Z
+                SqlTimestamp.legacyFromMillis(3, 1000123456789L, TimeZoneKey.UTC_KEY), // 2001-09-10T12:04:16.789Z
+                SqlTimestamp.legacyFromMillis(3, 1575553299564L, TimeZoneKey.UTC_KEY)); // 2019-12-05T13:41:39.564Z
+        tester.testRoundTrip(TIMESTAMP, newArrayList(limit(cycle(values), 30_000)));
     }
 
     @Test
@@ -323,7 +377,7 @@ public abstract class AbstractTestOrcReader
 
     private String toCharValue(Object value)
     {
-        return Strings.padEnd(value.toString(), CHAR_LENGTH, ' ');
+        return padSpaces(value.toString(), CHAR);
     }
 
     @Test
@@ -358,41 +412,9 @@ public abstract class AbstractTestOrcReader
         tester.testRoundTrip(VARBINARY, nCopies(30_000, new SqlVarbinary(new byte[0])));
     }
 
-    @Test
-    public void testDwrfInvalidCheckpointsForRowGroupDictionary()
-            throws Exception
-    {
-        List<Integer> values = newArrayList(limit(
-                cycle(concat(
-                        ImmutableList.of(1), nCopies(9999, 123),
-                        ImmutableList.of(2), nCopies(9999, 123),
-                        ImmutableList.of(3), nCopies(9999, 123),
-                        nCopies(1_000_000, null))),
-                200_000));
-
-        tester.assertRoundTrip(INTEGER, values, false);
-
-        tester.assertRoundTrip(
-                VARCHAR,
-                newArrayList(values).stream()
-                        .map(value -> value == null ? null : String.valueOf(value))
-                        .collect(toList()));
-    }
-
-    @Test
-    public void testDwrfInvalidCheckpointsForStripeDictionary()
-            throws Exception
-    {
-        tester.testRoundTrip(
-                VARCHAR,
-                newArrayList(limit(cycle(ImmutableList.of(1, 3, 5, 7, 11, 13, 17)), 200_000)).stream()
-                        .map(Object::toString)
-                        .collect(toList()));
-    }
-
     private static <T> Iterable<T> skipEvery(int n, Iterable<T> iterable)
     {
-        return () -> new AbstractIterator<T>()
+        return () -> new AbstractIterator<>()
         {
             private final Iterator<T> delegate = iterable.iterator();
             private int position;
@@ -418,7 +440,7 @@ public abstract class AbstractTestOrcReader
 
     private static <T> Iterable<T> repeatEach(int n, Iterable<T> iterable)
     {
-        return () -> new AbstractIterator<T>()
+        return () -> new AbstractIterator<>()
         {
             private final Iterator<T> delegate = iterable.iterator();
             private int position;
@@ -443,7 +465,7 @@ public abstract class AbstractTestOrcReader
         };
     }
 
-    private static List<Double> doubleSequence(double start, double step, int items)
+    protected static List<Double> doubleSequence(double start, double step, int items)
     {
         List<Double> values = new ArrayList<>();
         double nextValue = start;

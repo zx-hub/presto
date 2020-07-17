@@ -37,8 +37,6 @@ import io.prestosql.spiller.SpillerFactory;
 import io.prestosql.sql.gen.OrderingCompiler;
 import io.prestosql.sql.planner.plan.PlanNodeId;
 
-import javax.annotation.Nullable;
-
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -194,9 +192,7 @@ public class WindowOperator
     private final Optional<SpillablePagesToPagesIndexes> spillablePagesToPagesIndexes;
 
     private final WorkProcessor<Page> outputPages;
-    @Nullable
-    private Page pendingInput;
-    private boolean operatorFinishing;
+    private final PageBuffer pageBuffer = new PageBuffer();
 
     public WindowOperator(
             OperatorContext operatorContext,
@@ -294,14 +290,14 @@ public class WindowOperator
                     spillerFactory,
                     orderingCompiler.compilePageWithPositionComparator(sourceTypes, unGroupedOrderChannels, unGroupedOrdering)));
 
-            this.outputPages = WorkProcessor.create(new PagesSource())
+            this.outputPages = pageBuffer.pages()
                     .flatTransform(spillablePagesToPagesIndexes.get())
                     .flatMap(this::pagesIndexToWindowPartitions)
                     .transform(new WindowPartitionsToOutputPages());
         }
         else {
             this.spillablePagesToPagesIndexes = Optional.empty();
-            this.outputPages = WorkProcessor.create(new PagesSource())
+            this.outputPages = pageBuffer.pages()
                     .transform(new PagesToPagesIndexes(inMemoryPagesIndexWithHashStrategies, orderChannels, ordering))
                     .flatMap(this::pagesIndexToWindowPartitions)
                     .transform(new WindowPartitionsToOutputPages());
@@ -325,7 +321,7 @@ public class WindowOperator
     @Override
     public void finish()
     {
-        operatorFinishing = true;
+        pageBuffer.finish();
     }
 
     @Override
@@ -335,22 +331,26 @@ public class WindowOperator
     }
 
     @Override
+    public ListenableFuture<?> isBlocked()
+    {
+        // We can block e.g. because of self-triggered spill
+        if (outputPages.isBlocked()) {
+            return outputPages.getBlockedFuture();
+        }
+
+        return NOT_BLOCKED;
+    }
+
+    @Override
     public boolean needsInput()
     {
-        return pendingInput == null && !operatorFinishing;
+        return pageBuffer.isEmpty() && !pageBuffer.isFinished();
     }
 
     @Override
     public void addInput(Page page)
     {
-        requireNonNull(page, "page is null");
-        checkState(pendingInput == null, "Operator already has pending input");
-
-        if (page.getPositionCount() == 0) {
-            return;
-        }
-
-        pendingInput = page;
+        pageBuffer.add(page);
     }
 
     @Override
@@ -406,26 +406,6 @@ public class WindowOperator
         }
     }
 
-    private class PagesSource
-            implements WorkProcessor.Process<Page>
-    {
-        @Override
-        public ProcessState<Page> process()
-        {
-            if (operatorFinishing && pendingInput == null) {
-                return ProcessState.finished();
-            }
-
-            if (pendingInput != null) {
-                Page result = pendingInput;
-                pendingInput = null;
-                return ProcessState.ofResult(result);
-            }
-
-            return ProcessState.yield();
-        }
-    }
-
     private class PagesToPagesIndexes
             implements Transformation<Page, PagesIndexWithHashStrategies>
     {
@@ -449,7 +429,7 @@ public class WindowOperator
         }
 
         @Override
-        public TransformationState<PagesIndexWithHashStrategies> process(Optional<Page> pendingInputOptional)
+        public TransformationState<PagesIndexWithHashStrategies> process(Page pendingInput)
         {
             if (resetPagesIndex) {
                 pagesIndexWithHashStrategies.pagesIndex.clear();
@@ -457,20 +437,19 @@ public class WindowOperator
                 resetPagesIndex = false;
             }
 
-            boolean finishing = !pendingInputOptional.isPresent();
+            boolean finishing = pendingInput == null;
             if (finishing && pagesIndexWithHashStrategies.pagesIndex.getPositionCount() == 0) {
                 memoryContext.close();
                 return TransformationState.finished();
             }
 
             if (!finishing) {
-                Page pendingInput = pendingInputOptional.get();
                 pendingInputPosition = updatePagesIndex(pagesIndexWithHashStrategies, pendingInput, pendingInputPosition, Optional.empty());
                 updateMemoryUsage();
             }
 
             // If we have unused input or are finishing, then we have buffered a full group
-            if (finishing || pendingInputPosition < pendingInputOptional.get().getPositionCount()) {
+            if (finishing || pendingInputPosition < pendingInput.getPositionCount()) {
                 sortPagesIndexIfNecessary(pagesIndexWithHashStrategies, orderChannels, ordering);
                 resetPagesIndex = true;
                 return TransformationState.ofResult(pagesIndexWithHashStrategies, false);
@@ -494,7 +473,7 @@ public class WindowOperator
 
         windowInfo.addIndex(pagesIndex);
 
-        return WorkProcessor.create(new WorkProcessor.Process<WindowPartition>()
+        return WorkProcessor.create(new WorkProcessor.Process<>()
         {
             int partitionStart;
 
@@ -526,9 +505,9 @@ public class WindowOperator
         }
 
         @Override
-        public TransformationState<Page> process(Optional<WindowPartition> partitionOptional)
+        public TransformationState<Page> process(WindowPartition partition)
         {
-            boolean finishing = !partitionOptional.isPresent();
+            boolean finishing = partition == null;
             if (finishing) {
                 if (pageBuilder.isEmpty()) {
                     return TransformationState.finished();
@@ -540,7 +519,6 @@ public class WindowOperator
                 return TransformationState.ofResult(page, false);
             }
 
-            WindowPartition partition = partitionOptional.get();
             while (!pageBuilder.isFull() && partition.hasNext()) {
                 partition.processNextRow(pageBuilder);
             }
@@ -600,7 +578,7 @@ public class WindowOperator
         }
 
         @Override
-        public TransformationState<WorkProcessor<PagesIndexWithHashStrategies>> process(Optional<Page> pendingInputOptional)
+        public TransformationState<WorkProcessor<PagesIndexWithHashStrategies>> process(Page pendingInput)
         {
             if (spillingWhenConvertingRevocableMemory) {
                 // Spill could already be finished by Driver (via WindowOperator#finishMemoryRevoke), but finishRevokeMemory will take care of that
@@ -613,35 +591,38 @@ public class WindowOperator
                 inMemoryPagesIndexWithHashStrategies.pagesIndex.clear();
                 currentSpillGroupRowPage = Optional.empty();
 
-                if (spiller.isPresent()) {
-                    spiller.get().close();
-                    spiller = Optional.empty();
-                }
+                closeSpiller();
 
                 updateMemoryUsage(false);
                 resetPagesIndex = false;
             }
 
-            boolean finishing = !pendingInputOptional.isPresent();
-            if (finishing && inMemoryPagesIndexWithHashStrategies.pagesIndex.getPositionCount() == 0 && !spiller.isPresent()) {
+            boolean finishing = pendingInput == null;
+            if (finishing && inMemoryPagesIndexWithHashStrategies.pagesIndex.getPositionCount() == 0 && spiller.isEmpty()) {
                 localRevocableMemoryContext.close();
                 localUserMemoryContext.close();
+                closeSpiller();
                 return TransformationState.finished();
             }
 
             if (!finishing) {
-                Page pendingInput = pendingInputOptional.get();
                 pendingInputPosition = updatePagesIndex(inMemoryPagesIndexWithHashStrategies, pendingInput, pendingInputPosition, currentSpillGroupRowPage);
             }
 
             // If we have unused input or are finishing, then we have buffered a full group
-            if (finishing || pendingInputPosition < pendingInputOptional.get().getPositionCount()) {
+            if (finishing || pendingInputPosition < pendingInput.getPositionCount()) {
                 return fullGroupBuffered();
             }
 
             updateMemoryUsage(true);
             pendingInputPosition = 0;
             return needsMoreData();
+        }
+
+        void closeSpiller()
+        {
+            spiller.ifPresent(Spiller::close);
+            spiller = Optional.empty();
         }
 
         TransformationState<WorkProcessor<PagesIndexWithHashStrategies>> fullGroupBuffered()
@@ -677,7 +658,7 @@ public class WindowOperator
                 return spillInProgress.get();
             }
 
-            if (!spiller.isPresent()) {
+            if (spiller.isEmpty()) {
                 spiller = Optional.of(spillerFactory.create(
                         sourceTypes,
                         operatorContext.getSpillContext(),
@@ -697,7 +678,7 @@ public class WindowOperator
 
         void finishRevokeMemory()
         {
-            if (!spillInProgress.isPresent()) {
+            if (spillInProgress.isEmpty()) {
                 // Same spill iteration can be finished first by Driver (via WindowOperator#finishMemoryRevoke) and then by SpillablePagesToPagesIndexes#process(..)
                 return;
             }
@@ -716,7 +697,7 @@ public class WindowOperator
 
         WorkProcessor<PagesIndexWithHashStrategies> unspill()
         {
-            if (!spiller.isPresent()) {
+            if (spiller.isEmpty()) {
                 return WorkProcessor.fromIterable(ImmutableList.of(inMemoryPagesIndexWithHashStrategies));
             }
 
@@ -778,15 +759,11 @@ public class WindowOperator
                 // Save the remaining page, which may contain multiple partitions
                 return groupEnd;
             }
-            else {
-                // Page fully consumed
-                return page.getPositionCount();
-            }
+            // Page fully consumed
+            return page.getPositionCount();
         }
-        else {
-            // We had previous results buffered, but the remaining page starts with new group values
-            return startPosition;
-        }
+        // We had previous results buffered, but the remaining page starts with new group values
+        return startPosition;
     }
 
     private static Page rearrangePage(Page page, int[] channels)
@@ -861,5 +838,6 @@ public class WindowOperator
     public void close()
     {
         driverWindowInfo.set(Optional.of(windowInfo.build()));
+        spillablePagesToPagesIndexes.ifPresent(SpillablePagesToPagesIndexes::closeSpiller);
     }
 }

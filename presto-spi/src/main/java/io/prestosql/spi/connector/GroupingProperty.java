@@ -24,6 +24,7 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import static java.lang.String.format;
 import static java.util.Collections.unmodifiableSet;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toCollection;
@@ -47,6 +48,7 @@ public final class GroupingProperty<E>
         return true;
     }
 
+    @Override
     @JsonProperty
     public Set<E> getColumns()
     {
@@ -57,7 +59,7 @@ public final class GroupingProperty<E>
     public LocalProperty<E> constrain(Set<E> columns)
     {
         if (!this.columns.containsAll(columns)) {
-            throw new IllegalArgumentException(String.format("Cannot constrain %s with %s", this, columns));
+            throw new IllegalArgumentException(format("Cannot constrain %s with %s", this, columns));
         }
 
         return new GroupingProperty<>(columns);

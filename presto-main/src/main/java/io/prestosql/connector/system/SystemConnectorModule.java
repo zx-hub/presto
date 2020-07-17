@@ -49,9 +49,11 @@ public class SystemConnectorModule
         globalTableBinder.addBinding().to(QuerySystemTable.class).in(Scopes.SINGLETON);
         globalTableBinder.addBinding().to(TaskSystemTable.class).in(Scopes.SINGLETON);
         globalTableBinder.addBinding().to(CatalogSystemTable.class).in(Scopes.SINGLETON);
+        globalTableBinder.addBinding().to(TableCommentSystemTable.class).in(Scopes.SINGLETON);
         globalTableBinder.addBinding().to(SchemaPropertiesSystemTable.class).in(Scopes.SINGLETON);
         globalTableBinder.addBinding().to(TablePropertiesSystemTable.class).in(Scopes.SINGLETON);
         globalTableBinder.addBinding().to(ColumnPropertiesSystemTable.class).in(Scopes.SINGLETON);
+        globalTableBinder.addBinding().to(AnalyzePropertiesSystemTable.class).in(Scopes.SINGLETON);
         globalTableBinder.addBinding().to(TransactionsSystemTable.class).in(Scopes.SINGLETON);
 
         globalTableBinder.addBinding().to(AttributeJdbcTable.class).in(Scopes.SINGLETON);
@@ -87,8 +89,8 @@ public class SystemConnectorModule
         @Inject
         public SystemConnectorRegistrar(ConnectorManager manager, GlobalSystemConnectorFactory globalSystemConnectorFactory)
         {
-            manager.addConnectorFactory(globalSystemConnectorFactory);
-            manager.createConnection(GlobalSystemConnector.NAME, GlobalSystemConnector.NAME, ImmutableMap.of());
+            manager.addConnectorFactory(globalSystemConnectorFactory, globalSystemConnectorFactory.getClass()::getClassLoader);
+            manager.createCatalog(GlobalSystemConnector.NAME, GlobalSystemConnector.NAME, ImmutableMap.of());
         }
     }
 }

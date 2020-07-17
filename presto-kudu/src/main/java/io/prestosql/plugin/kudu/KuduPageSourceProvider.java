@@ -19,8 +19,10 @@ import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.connector.ConnectorPageSourceProvider;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorSplit;
+import io.prestosql.spi.connector.ConnectorTableHandle;
 import io.prestosql.spi.connector.ConnectorTransactionHandle;
 import io.prestosql.spi.connector.RecordPageSource;
+import io.prestosql.spi.predicate.TupleDomain;
 
 import java.util.List;
 
@@ -38,15 +40,18 @@ public class KuduPageSourceProvider
     }
 
     @Override
-    public ConnectorPageSource createPageSource(ConnectorTransactionHandle transactionHandle,
-            ConnectorSession session, ConnectorSplit split, List<ColumnHandle> columns)
+    public ConnectorPageSource createPageSource(
+            ConnectorTransactionHandle transaction,
+            ConnectorSession session,
+            ConnectorSplit split,
+            ConnectorTableHandle table,
+            List<ColumnHandle> columns,
+            TupleDomain<ColumnHandle> dynamicFilter)
     {
-        KuduRecordSet recordSet = (KuduRecordSet) recordSetProvider.getRecordSet(transactionHandle, session, split, columns);
+        KuduRecordSet recordSet = (KuduRecordSet) recordSetProvider.getRecordSet(transaction, session, split, table, columns);
         if (columns.contains(KuduColumnHandle.ROW_ID_HANDLE)) {
             return new KuduUpdatablePageSource(recordSet);
         }
-        else {
-            return new RecordPageSource(recordSet);
-        }
+        return new RecordPageSource(recordSet);
     }
 }

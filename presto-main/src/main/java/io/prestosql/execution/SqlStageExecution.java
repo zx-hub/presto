@@ -24,10 +24,10 @@ import io.prestosql.Session;
 import io.prestosql.execution.StateMachine.StateChangeListener;
 import io.prestosql.execution.buffer.OutputBuffers;
 import io.prestosql.execution.scheduler.SplitSchedulerStats;
-import io.prestosql.failureDetector.FailureDetector;
-import io.prestosql.metadata.RemoteTransactionHandle;
+import io.prestosql.failuredetector.FailureDetector;
+import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.Split;
-import io.prestosql.spi.Node;
+import io.prestosql.server.DynamicFilterService.StageDynamicFilters;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.split.RemoteSplit;
 import io.prestosql.sql.planner.PlanFragment;
@@ -62,7 +62,7 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Sets.newConcurrentHashSet;
 import static io.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
-import static io.prestosql.failureDetector.FailureDetector.State.GONE;
+import static io.prestosql.failuredetector.FailureDetector.State.GONE;
 import static io.prestosql.operator.ExchangeOperator.REMOTE_CONNECTOR_ID;
 import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.prestosql.spi.StandardErrorCode.REMOTE_HOST_GONE;
@@ -80,7 +80,7 @@ public final class SqlStageExecution
 
     private final Map<PlanFragmentId, RemoteSourceNode> exchangeSources;
 
-    private final Map<Node, Set<RemoteTask>> tasks = new ConcurrentHashMap<>();
+    private final Map<InternalNode, Set<RemoteTask>> tasks = new ConcurrentHashMap<>();
 
     @GuardedBy("this")
     private final AtomicInteger nextTaskId = new AtomicInteger();
@@ -106,8 +106,8 @@ public final class SqlStageExecution
 
     public static SqlStageExecution createSqlStageExecution(
             StageId stageId,
-            URI location,
             PlanFragment fragment,
+            Map<PlanNodeId, TableInfo> tables,
             RemoteTaskFactory remoteTaskFactory,
             Session session,
             boolean summarizeTaskInfo,
@@ -117,8 +117,8 @@ public final class SqlStageExecution
             SplitSchedulerStats schedulerStats)
     {
         requireNonNull(stageId, "stageId is null");
-        requireNonNull(location, "location is null");
         requireNonNull(fragment, "fragment is null");
+        requireNonNull(tables, "tables is null");
         requireNonNull(remoteTaskFactory, "remoteTaskFactory is null");
         requireNonNull(session, "session is null");
         requireNonNull(nodeTaskMap, "nodeTaskMap is null");
@@ -127,7 +127,7 @@ public final class SqlStageExecution
         requireNonNull(schedulerStats, "schedulerStats is null");
 
         SqlStageExecution sqlStageExecution = new SqlStageExecution(
-                new StageStateMachine(stageId, location, session, fragment, executor, schedulerStats),
+                new StageStateMachine(stageId, session, fragment, tables, executor, schedulerStats),
                 remoteTaskFactory,
                 nodeTaskMap,
                 summarizeTaskInfo,
@@ -282,6 +282,17 @@ public final class SqlStageExecution
         return stateMachine.getStageInfo(this::getAllTaskInfo);
     }
 
+    public StageDynamicFilters getStageDynamicFilters()
+    {
+        List<RemoteTask> tasks = getAllTasks();
+        return new StageDynamicFilters(
+                stateMachine.getState(),
+                tasks.size(),
+                tasks.stream()
+                        .map(task -> task.getTaskStatus().getDynamicFilterDomains())
+                        .collect(toImmutableList()));
+    }
+
     private Iterable<TaskInfo> getAllTaskInfo()
     {
         return getAllTasks().stream()
@@ -359,18 +370,18 @@ public final class SqlStageExecution
                 .collect(toImmutableList());
     }
 
-    public synchronized Optional<RemoteTask> scheduleTask(Node node, int partition, OptionalInt totalPartitions)
+    public synchronized Optional<RemoteTask> scheduleTask(InternalNode node, int partition, OptionalInt totalPartitions)
     {
         requireNonNull(node, "node is null");
 
         if (stateMachine.getState().isDone()) {
             return Optional.empty();
         }
-        checkState(!splitsScheduled.get(), "scheduleTask can not be called once splits have been scheduled");
+        checkState(!splitsScheduled.get(), "scheduleTask cannot be called once splits have been scheduled");
         return Optional.of(scheduleTask(node, new TaskId(stateMachine.getStageId(), partition), ImmutableMultimap.of(), totalPartitions));
     }
 
-    public synchronized Set<RemoteTask> scheduleSplits(Node node, Multimap<PlanNodeId, Split> splits, Multimap<PlanNodeId, Lifespan> noMoreSplitsNotification)
+    public synchronized Set<RemoteTask> scheduleSplits(InternalNode node, Multimap<PlanNodeId, Split> splits, Multimap<PlanNodeId, Lifespan> noMoreSplitsNotification)
     {
         requireNonNull(node, "node is null");
         requireNonNull(splits, "splits is null");
@@ -408,7 +419,7 @@ public final class SqlStageExecution
         return newTasks.build();
     }
 
-    private synchronized RemoteTask scheduleTask(Node node, TaskId taskId, Multimap<PlanNodeId, Split> sourceSplits, OptionalInt totalPartitions)
+    private synchronized RemoteTask scheduleTask(InternalNode node, TaskId taskId, Multimap<PlanNodeId, Split> sourceSplits, OptionalInt totalPartitions)
     {
         checkArgument(!allTasks.contains(taskId), "A task with id %s already exists", taskId);
 
@@ -456,7 +467,7 @@ public final class SqlStageExecution
         return task;
     }
 
-    public Set<Node> getScheduledNodes()
+    public Set<InternalNode> getScheduledNodes()
     {
         return ImmutableSet.copyOf(tasks.keySet());
     }
@@ -470,7 +481,7 @@ public final class SqlStageExecution
     {
         // Fetch the results from the buffer assigned to the task based on id
         URI splitLocation = uriBuilderFrom(taskLocation).appendPath("results").appendPath(String.valueOf(taskId.getId())).build();
-        return new Split(REMOTE_CONNECTOR_ID, new RemoteTransactionHandle(), new RemoteSplit(splitLocation));
+        return new Split(REMOTE_CONNECTOR_ID, new RemoteSplit(splitLocation), Lifespan.taskWide());
     }
 
     private synchronized void updateTaskStatus(TaskStatus taskStatus)
@@ -557,6 +568,7 @@ public final class SqlStageExecution
     {
         private long previousUserMemory;
         private long previousSystemMemory;
+        private long previousRevocableMemory;
         private final Set<Lifespan> completedDriverGroups = new HashSet<>();
 
         @Override
@@ -575,11 +587,14 @@ public final class SqlStageExecution
         {
             long currentUserMemory = taskStatus.getMemoryReservation().toBytes();
             long currentSystemMemory = taskStatus.getSystemMemoryReservation().toBytes();
+            long currentRevocableMemory = taskStatus.getRevocableMemoryReservation().toBytes();
             long deltaUserMemoryInBytes = currentUserMemory - previousUserMemory;
-            long deltaTotalMemoryInBytes = (currentUserMemory + currentSystemMemory) - (previousUserMemory + previousSystemMemory);
+            long deltaRevocableMemoryInBytes = currentRevocableMemory - previousRevocableMemory;
+            long deltaTotalMemoryInBytes = (currentUserMemory + currentSystemMemory + currentRevocableMemory) - (previousUserMemory + previousSystemMemory + previousRevocableMemory);
             previousUserMemory = currentUserMemory;
             previousSystemMemory = currentSystemMemory;
-            stateMachine.updateMemoryUsage(deltaUserMemoryInBytes, deltaTotalMemoryInBytes);
+            previousRevocableMemory = currentRevocableMemory;
+            stateMachine.updateMemoryUsage(deltaUserMemoryInBytes, deltaRevocableMemoryInBytes, deltaTotalMemoryInBytes);
         }
 
         private synchronized void updateCompletedDriverGroups(TaskStatus taskStatus)

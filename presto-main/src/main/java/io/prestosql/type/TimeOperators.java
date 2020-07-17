@@ -27,11 +27,11 @@ import io.prestosql.spi.function.SqlNullable;
 import io.prestosql.spi.function.SqlType;
 import io.prestosql.spi.type.AbstractLongType;
 import io.prestosql.spi.type.StandardTypes;
+import io.prestosql.util.DateTimeUtils;
 import org.joda.time.chrono.ISOChronology;
 
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.prestosql.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
-import static io.prestosql.spi.function.OperatorType.BETWEEN;
 import static io.prestosql.spi.function.OperatorType.CAST;
 import static io.prestosql.spi.function.OperatorType.EQUAL;
 import static io.prestosql.spi.function.OperatorType.GREATER_THAN;
@@ -52,9 +52,7 @@ import static io.prestosql.util.DateTimeZoneIndex.getChronology;
 
 public final class TimeOperators
 {
-    private TimeOperators()
-    {
-    }
+    private TimeOperators() {}
 
     @ScalarOperator(SUBTRACT)
     @SqlType(StandardTypes.INTERVAL_DAY_TO_SECOND)
@@ -107,13 +105,6 @@ public final class TimeOperators
         return left >= right;
     }
 
-    @ScalarOperator(BETWEEN)
-    @SqlType(StandardTypes.BOOLEAN)
-    public static boolean between(@SqlType(StandardTypes.TIME) long value, @SqlType(StandardTypes.TIME) long min, @SqlType(StandardTypes.TIME) long max)
-    {
-        return min <= value && value <= max;
-    }
-
     @ScalarOperator(CAST)
     @SqlType(StandardTypes.TIME_WITH_TIME_ZONE)
     public static long castToTimeWithTimeZone(ConnectorSession session, @SqlType(StandardTypes.TIME) long value)
@@ -121,30 +112,14 @@ public final class TimeOperators
         if (session.isLegacyTimestamp()) {
             return packDateTimeWithZone(value, session.getTimeZoneKey());
         }
-        else {
-            ISOChronology localChronology = getChronology(session.getTimeZoneKey());
 
-            // This cast does treat TIME as wall time in session TZ. This means that in order to get
-            // its UTC representation we need to shift the value by the offset of TZ.
-            // We use value offset in this place to be sure that we will have same hour represented
-            // in TIME WITH TIME ZONE. Calculating real TZ offset will happen when really required.
-            // This is done due to inadequate TIME WITH TIME ZONE representation.
-            return packDateTimeWithZone(localChronology.getZone().convertLocalToUTC(value, false), session.getTimeZoneKey());
-        }
-    }
-
-    @ScalarOperator(CAST)
-    @SqlType(StandardTypes.TIMESTAMP)
-    public static long castToTimestamp(@SqlType(StandardTypes.TIME) long value)
-    {
-        return value;
-    }
-
-    @ScalarOperator(CAST)
-    @SqlType(StandardTypes.TIMESTAMP_WITH_TIME_ZONE)
-    public static long castToTimestampWithTimeZone(ConnectorSession session, @SqlType(StandardTypes.TIME) long value)
-    {
-        return castToTimeWithTimeZone(session, value);
+        ISOChronology localChronology = getChronology(session.getTimeZoneKey());
+        // This cast does treat TIME as wall time in session TZ. This means that in order to get
+        // its UTC representation we need to shift the value by the offset of TZ.
+        // We use value offset in this place to be sure that we will have same hour represented
+        // in TIME WITH TIME ZONE. Calculating real TZ offset will happen when really required.
+        // This is done due to inadequate TIME WITH TIME ZONE representation.
+        return packDateTimeWithZone(localChronology.getZone().convertLocalToUTC(value, false), session.getTimeZoneKey());
     }
 
     @ScalarOperator(CAST)
@@ -155,9 +130,8 @@ public final class TimeOperators
         if (session.isLegacyTimestamp()) {
             return utf8Slice(printTimeWithoutTimeZone(session.getTimeZoneKey(), value));
         }
-        else {
-            return utf8Slice(printTimeWithoutTimeZone(value));
-        }
+
+        return utf8Slice(printTimeWithoutTimeZone(value));
     }
 
     @ScalarOperator(CAST)
@@ -167,11 +141,9 @@ public final class TimeOperators
     {
         try {
             if (session.isLegacyTimestamp()) {
-                return parseTimeWithoutTimeZone(session.getTimeZoneKey(), value.toStringUtf8());
+                return DateTimeUtils.parseLegacyTime(session.getTimeZoneKey(), value.toStringUtf8());
             }
-            else {
-                return parseTimeWithoutTimeZone(value.toStringUtf8());
-            }
+            return parseTimeWithoutTimeZone(value.toStringUtf8());
         }
         catch (IllegalArgumentException e) {
             throw new PrestoException(INVALID_CAST_ARGUMENT, "Value cannot be cast to time: " + value.toStringUtf8(), e);
@@ -193,7 +165,7 @@ public final class TimeOperators
     }
 
     @ScalarOperator(IS_DISTINCT_FROM)
-    public static class TimeDistinctFromOperator
+    public static final class TimeDistinctFromOperator
     {
         @SqlType(StandardTypes.BOOLEAN)
         public static boolean isDistinctFrom(

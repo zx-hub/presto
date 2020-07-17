@@ -19,6 +19,7 @@ import io.prestosql.spi.PrestoException;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.time.ZoneId;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -33,6 +34,7 @@ import static io.prestosql.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static java.lang.Character.isDigit;
 import static java.lang.Math.abs;
 import static java.lang.Math.max;
+import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
 
@@ -140,7 +142,7 @@ public final class TimeZoneKey
         }
 
         if (!(offsetMinutes >= OFFSET_TIME_ZONE_MIN && offsetMinutes <= OFFSET_TIME_ZONE_MAX)) {
-            throw new PrestoException(INVALID_FUNCTION_ARGUMENT, String.format("Invalid offset minutes %s", offsetMinutes));
+            throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Invalid offset minutes " + offsetMinutes);
         }
         TimeZoneKey timeZoneKey = OFFSET_TIME_ZONE_KEYS[((int) offsetMinutes) - OFFSET_TIME_ZONE_MIN];
         if (timeZoneKey == null) {
@@ -165,6 +167,11 @@ public final class TimeZoneKey
     public String getId()
     {
         return id;
+    }
+
+    public ZoneId getZoneId()
+    {
+        return ZoneId.of(id);
     }
 
     @JsonValue
@@ -294,7 +301,6 @@ public final class TimeZoneKey
                 zoneId.equals("z") ||
                 zoneId.equals("ut") ||
                 zoneId.equals("uct") ||
-                zoneId.equals("ut") ||
                 zoneId.equals("gmt") ||
                 zoneId.equals("gmt0") ||
                 zoneId.equals("greenwich") ||
@@ -304,13 +310,13 @@ public final class TimeZoneKey
 
     private static String zoneIdForOffset(long offset)
     {
-        return String.format("%s%02d:%02d", offset < 0 ? "-" : "+", abs(offset / 60), abs(offset % 60));
+        return format("%s%02d:%02d", offset < 0 ? "-" : "+", abs(offset / 60), abs(offset % 60));
     }
 
     private static void checkArgument(boolean check, String message, Object... args)
     {
         if (!check) {
-            throw new IllegalArgumentException(String.format(message, args));
+            throw new IllegalArgumentException(format(message, args));
         }
     }
 }

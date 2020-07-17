@@ -66,12 +66,26 @@ public final class ColumnMapping
         return new ColumnMapping(prestoType, readFunction, writeFunction, pushdownConverter);
     }
 
+    public static <T> ColumnMapping objectMapping(Type prestoType, ObjectReadFunction readFunction, ObjectWriteFunction writeFunction)
+    {
+        return objectMapping(prestoType, readFunction, writeFunction, UnaryOperator.identity());
+    }
+
+    public static <T> ColumnMapping objectMapping(Type prestoType, ObjectReadFunction readFunction, ObjectWriteFunction writeFunction, UnaryOperator<Domain> pushdownConverter)
+    {
+        return new ColumnMapping(prestoType, readFunction, writeFunction, pushdownConverter);
+    }
+
     private final Type type;
     private final ReadFunction readFunction;
     private final WriteFunction writeFunction;
     private final UnaryOperator<Domain> pushdownConverter;
 
-    private ColumnMapping(Type type, ReadFunction readFunction, WriteFunction writeFunction, UnaryOperator<Domain> pushdownConverter)
+    /**
+     * @deprecated Prefer factory methods instead over calling constructor directly.
+     */
+    @Deprecated
+    public ColumnMapping(Type type, ReadFunction readFunction, WriteFunction writeFunction, UnaryOperator<Domain> pushdownConverter)
     {
         this.type = requireNonNull(type, "type is null");
         this.readFunction = requireNonNull(readFunction, "readFunction is null");

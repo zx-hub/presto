@@ -56,14 +56,13 @@ public class TestJdbcResultSet
 
     @BeforeClass
     public void setupServer()
-            throws Exception
     {
         Logging.initialize();
-        server = new TestingPrestoServer();
+        server = TestingPrestoServer.create();
     }
 
     @AfterClass(alwaysRun = true)
-    public void teardownServer()
+    public void tearDownServer()
     {
         closeQuietly(server);
     }
@@ -77,7 +76,7 @@ public class TestJdbcResultSet
         statement = connection.createStatement();
     }
 
-    @AfterMethod
+    @AfterMethod(alwaysRun = true)
     public void teardown()
     {
         closeQuietly(statement);
@@ -118,6 +117,8 @@ public class TestJdbcResultSet
         checkRepresentation("cast('foo' as char(5))", Types.CHAR, "foo  ");
         checkRepresentation("ARRAY[1, 2]", Types.ARRAY, (rs, column) -> assertEquals(rs.getArray(column).getArray(), new int[] {1, 2}));
         checkRepresentation("DECIMAL '0.1'", Types.DECIMAL, new BigDecimal("0.1"));
+        checkRepresentation("IPADDRESS '1.2.3.4'", Types.JAVA_OBJECT, "1.2.3.4");
+        checkRepresentation("UUID '0397e63b-2b78-4b7b-9c87-e085fa225dd8'", Types.JAVA_OBJECT, "0397e63b-2b78-4b7b-9c87-e085fa225dd8");
 
         checkRepresentation("DATE '2018-02-13'", Types.DATE, (rs, column) -> {
             assertEquals(rs.getObject(column), Date.valueOf(LocalDate.of(2018, 2, 13)));
@@ -133,7 +134,7 @@ public class TestJdbcResultSet
             assertThrows(() -> rs.getTimestamp(column));
         });
 
-        // TODO https://github.com/prestodb/presto/issues/7122
+        // TODO https://github.com/prestosql/presto/issues/37
         // TODO line 1:8: '00:39:05' is not a valid time literal
 //        checkRepresentation("TIME '00:39:05'", Types.TIME, (rs, column) -> {
 //            ...
@@ -177,11 +178,37 @@ public class TestJdbcResultSet
             assertEquals(rs.getTimestamp(column), Timestamp.valueOf(LocalDateTime.of(2018, 2, 13, 13, 14, 15, 123_000_000)));
         });
 
-        // TODO https://github.com/prestodb/presto/issues/7122
+        checkRepresentation("TIMESTAMP '2018-02-13 13:14:15.111111111111'", Types.TIMESTAMP, (rs, column) -> {
+            assertEquals(rs.getObject(column), Timestamp.valueOf(LocalDateTime.of(2018, 2, 13, 13, 14, 15, 111_111_111)));
+            assertThrows(() -> rs.getDate(column));
+            assertThrows(() -> rs.getTime(column));
+            assertEquals(rs.getTimestamp(column), Timestamp.valueOf(LocalDateTime.of(2018, 2, 13, 13, 14, 15, 111_111_111)));
+        });
+
+        checkRepresentation("TIMESTAMP '2018-02-13 13:14:15.555555555555'", Types.TIMESTAMP, (rs, column) -> {
+            assertEquals(rs.getObject(column), Timestamp.valueOf(LocalDateTime.of(2018, 2, 13, 13, 14, 15, 555_555_556)));
+            assertThrows(() -> rs.getDate(column));
+            assertThrows(() -> rs.getTime(column));
+            assertEquals(rs.getTimestamp(column), Timestamp.valueOf(LocalDateTime.of(2018, 2, 13, 13, 14, 15, 555_555_556)));
+        });
+
+        // TODO https://github.com/prestosql/presto/issues/37
         // TODO line 1:8: '1970-01-01 00:14:15.123' is not a valid timestamp literal; the expected values will pro
 //        checkRepresentation("TIMESTAMP '1970-01-01 00:14:15.123'", Types.TIMESTAMP, (rs, column) -> {
 //            ...
 //        });
+
+        // TODO https://github.com/prestosql/presto/issues/4363
+//        checkRepresentation("TIMESTAMP '-123456-01-23 01:23:45.123456789'", Types.TIMESTAMP, (rs, column) -> {
+//            ...
+//        });
+
+        checkRepresentation("TIMESTAMP '123456-01-23 01:23:45.123456789'", Types.TIMESTAMP, (rs, column) -> {
+            assertEquals(rs.getObject(column), Timestamp.valueOf(LocalDateTime.of(123456, 1, 23, 1, 23, 45, 123_456_789)));
+            assertThrows(() -> rs.getDate(column));
+            assertThrows(() -> rs.getTime(column));
+            assertEquals(rs.getTimestamp(column), Timestamp.valueOf(LocalDateTime.of(123456, 1, 23, 1, 23, 45, 123_456_789)));
+        });
 
         checkRepresentation("TIMESTAMP '2018-02-13 13:14:15.227 Europe/Warsaw'", Types.TIMESTAMP /* TODO TIMESTAMP_WITH_TIMEZONE */, (rs, column) -> {
             assertEquals(rs.getObject(column), Timestamp.valueOf(LocalDateTime.of(2018, 2, 13, 6, 14, 15, 227_000_000))); // TODO this should represent TIMESTAMP '2018-02-13 13:14:15.227 Europe/Warsaw'
@@ -203,6 +230,18 @@ public class TestJdbcResultSet
             assertThrows(() -> rs.getTime(column));
             // TODO this should fail, as there no java.sql.Timestamp representation for TIMESTAMP '1970-01-01 00:14:15.227ó' in America/Bahia_Banderas
             assertEquals(rs.getTimestamp(column), Timestamp.valueOf(LocalDateTime.of(1969, 12, 31, 15, 14, 15, 227_000_000)));
+        });
+
+        // TODO https://github.com/prestosql/presto/issues/4363
+//        checkRepresentation("TIMESTAMP '-12345-01-23 01:23:45.123456789 Europe/Warsaw'", Types.TIMESTAMP /* TODO TIMESTAMP_WITH_TIMEZONE */, (rs, column) -> {
+//            ...
+//        });
+
+        checkRepresentation("TIMESTAMP '12345-01-23 01:23:45.123456789 Europe/Warsaw'", Types.TIMESTAMP /* TODO TIMESTAMP_WITH_TIMEZONE */, (rs, column) -> {
+            assertEquals(rs.getObject(column), Timestamp.valueOf(LocalDateTime.of(12345, 1, 22, 18, 23, 45, 123_456_789))); // TODO this should contain the zone
+            assertThrows(() -> rs.getDate(column));
+            assertThrows(() -> rs.getTime(column));
+            assertEquals(rs.getTimestamp(column), Timestamp.valueOf(LocalDateTime.of(12345, 1, 22, 18, 23, 45, 123_456_789)));
         });
     }
 

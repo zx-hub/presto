@@ -16,19 +16,26 @@ package io.prestosql.operator.scalar;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Primitives;
 import io.prestosql.metadata.BoundVariables;
-import io.prestosql.metadata.FunctionKind;
-import io.prestosql.metadata.FunctionRegistry;
+import io.prestosql.metadata.FunctionArgumentDefinition;
+import io.prestosql.metadata.FunctionMetadata;
+import io.prestosql.metadata.Metadata;
+import io.prestosql.metadata.ResolvedFunction;
 import io.prestosql.metadata.Signature;
 import io.prestosql.metadata.SqlScalarFunction;
 import io.prestosql.operator.scalar.ScalarFunctionImplementation.ArgumentProperty;
 import io.prestosql.spi.type.Type;
-import io.prestosql.spi.type.TypeManager;
+import io.prestosql.spi.type.TypeSignature;
 
 import java.lang.invoke.MethodHandle;
 import java.util.List;
+import java.util.Optional;
 
+import static io.prestosql.metadata.FunctionKind.SCALAR;
+import static io.prestosql.metadata.Signature.castableToTypeParameter;
 import static io.prestosql.metadata.Signature.typeVariable;
-import static io.prestosql.spi.type.TypeSignature.parseTypeSignature;
+import static io.prestosql.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static io.prestosql.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
+import static io.prestosql.operator.scalar.ScalarFunctionImplementation.NullConvention.USE_BOXED_TYPE;
 import static java.lang.invoke.MethodHandles.catchException;
 import static java.lang.invoke.MethodHandles.constant;
 import static java.lang.invoke.MethodHandles.dropArguments;
@@ -41,54 +48,40 @@ public class TryCastFunction
 
     public TryCastFunction()
     {
-        super(new Signature(
-                "TRY_CAST",
-                FunctionKind.SCALAR,
-                ImmutableList.of(typeVariable("F"), typeVariable("T")),
-                ImmutableList.of(),
-                parseTypeSignature("T"),
-                ImmutableList.of(parseTypeSignature("F")),
-                false));
+        super(new FunctionMetadata(
+                new Signature(
+                        "TRY_CAST",
+                        ImmutableList.of(castableToTypeParameter("F", new TypeSignature("T")), typeVariable("T")),
+                        ImmutableList.of(),
+                        new TypeSignature("T"),
+                        ImmutableList.of(new TypeSignature("F")),
+                        false),
+                true,
+                ImmutableList.of(new FunctionArgumentDefinition(false)),
+                true,
+                true,
+                "",
+                SCALAR));
     }
 
     @Override
-    public boolean isHidden()
-    {
-        return true;
-    }
-
-    @Override
-    public boolean isDeterministic()
-    {
-        return true;
-    }
-
-    @Override
-    public String getDescription()
-    {
-        return "";
-    }
-
-    @Override
-    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, Metadata metadata)
     {
         Type fromType = boundVariables.getTypeVariable("F");
         Type toType = boundVariables.getTypeVariable("T");
 
         Class<?> returnType = Primitives.wrap(toType.getJavaType());
-        List<ArgumentProperty> argumentProperties;
-        MethodHandle tryCastHandle;
 
         // the resulting method needs to return a boxed type
-        Signature signature = functionRegistry.getCoercion(fromType, toType);
-        ScalarFunctionImplementation implementation = functionRegistry.getScalarFunctionImplementation(signature);
-        argumentProperties = ImmutableList.of(implementation.getArgumentProperty(0));
-        MethodHandle coercion = implementation.getMethodHandle();
+        ResolvedFunction resolvedFunction = metadata.getCoercion(fromType, toType);
+        MethodHandle coercion = metadata.getScalarFunctionInvoker(resolvedFunction, Optional.empty()).getMethodHandle();
         coercion = coercion.asType(methodType(returnType, coercion.type()));
 
         MethodHandle exceptionHandler = dropArguments(constant(returnType, null), 0, RuntimeException.class);
-        tryCastHandle = catchException(coercion, RuntimeException.class, exceptionHandler);
+        MethodHandle tryCastHandle = catchException(coercion, RuntimeException.class, exceptionHandler);
 
-        return new ScalarFunctionImplementation(true, argumentProperties, tryCastHandle, isDeterministic());
+        boolean nullable = metadata.getFunctionMetadata(resolvedFunction).getArgumentDefinitions().get(0).isNullable();
+        List<ArgumentProperty> argumentProperties = ImmutableList.of(nullable ? valueTypeArgumentProperty(USE_BOXED_TYPE) : valueTypeArgumentProperty(RETURN_NULL_ON_NULL));
+        return new ScalarFunctionImplementation(true, argumentProperties, tryCastHandle);
     }
 }

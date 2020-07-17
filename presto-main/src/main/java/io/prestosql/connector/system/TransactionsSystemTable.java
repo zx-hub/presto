@@ -14,7 +14,8 @@
 package io.prestosql.connector.system;
 
 import com.google.common.collect.ImmutableList;
-import io.prestosql.connector.ConnectorId;
+import io.prestosql.connector.CatalogName;
+import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.connector.ConnectorSession;
@@ -26,7 +27,6 @@ import io.prestosql.spi.connector.RecordCursor;
 import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.connector.SystemTable;
 import io.prestosql.spi.predicate.TupleDomain;
-import io.prestosql.spi.type.TypeManager;
 import io.prestosql.spi.type.TypeSignatureParameter;
 import io.prestosql.spi.type.VarcharType;
 import io.prestosql.transaction.TransactionInfo;
@@ -55,7 +55,7 @@ public class TransactionsSystemTable
     private final TransactionManager transactionManager;
 
     @Inject
-    public TransactionsSystemTable(TypeManager typeManager, TransactionManager transactionManager)
+    public TransactionsSystemTable(Metadata metadata, TransactionManager transactionManager)
     {
         this.transactionsTable = tableMetadataBuilder(TRANSACTIONS_TABLE_NAME)
                 .column("transaction_id", createUnboundedVarcharType())
@@ -65,7 +65,7 @@ public class TransactionsSystemTable
                 .column("create_time", TIMESTAMP)
                 .column("idle_time_secs", BIGINT)
                 .column("written_catalog", createUnboundedVarcharType())
-                .column("catalogs", typeManager.getParameterizedType(ARRAY, ImmutableList.of(TypeSignatureParameter.of(createUnboundedVarcharType().getTypeSignature()))))
+                .column("catalogs", metadata.getParameterizedType(ARRAY, ImmutableList.of(TypeSignatureParameter.typeParameter(createUnboundedVarcharType().getTypeSignature()))))
                 .build();
         this.transactionManager = requireNonNull(transactionManager, "transactionManager is null");
     }
@@ -94,17 +94,17 @@ public class TransactionsSystemTable
                     info.isAutoCommitContext(),
                     info.getCreateTime().getMillis(),
                     (long) info.getIdleTime().getValue(TimeUnit.SECONDS),
-                    info.getWrittenConnectorId().map(ConnectorId::getCatalogName).orElse(null),
-                    createStringsBlock(info.getConnectorIds()));
+                    info.getWrittenConnectorId().map(CatalogName::getCatalogName).orElse(null),
+                    createStringsBlock(info.getCatalogNames()));
         }
         return table.build().cursor();
     }
 
-    private static Block createStringsBlock(List<ConnectorId> values)
+    private static Block createStringsBlock(List<CatalogName> values)
     {
         VarcharType varchar = createUnboundedVarcharType();
         BlockBuilder builder = varchar.createBlockBuilder(null, values.size());
-        for (ConnectorId value : values) {
+        for (CatalogName value : values) {
             if (value == null) {
                 builder.appendNull();
             }

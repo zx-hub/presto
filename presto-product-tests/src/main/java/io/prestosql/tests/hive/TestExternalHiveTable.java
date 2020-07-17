@@ -13,20 +13,20 @@
  */
 package io.prestosql.tests.hive;
 
-import io.prestodb.tempto.ProductTest;
-import io.prestodb.tempto.Requirement;
-import io.prestodb.tempto.RequirementsProvider;
-import io.prestodb.tempto.configuration.Configuration;
-import io.prestodb.tempto.fulfillment.table.TableInstance;
+import io.prestosql.tempto.ProductTest;
+import io.prestosql.tempto.Requirement;
+import io.prestosql.tempto.RequirementsProvider;
+import io.prestosql.tempto.configuration.Configuration;
+import io.prestosql.tempto.fulfillment.table.TableInstance;
 import org.testng.annotations.Test;
 
-import static io.prestodb.tempto.Requirements.compose;
-import static io.prestodb.tempto.assertions.QueryAssert.Row.row;
-import static io.prestodb.tempto.assertions.QueryAssert.assertThat;
-import static io.prestodb.tempto.fulfillment.table.MutableTablesState.mutableTablesState;
-import static io.prestodb.tempto.fulfillment.table.TableRequirements.mutableTable;
-import static io.prestodb.tempto.fulfillment.table.hive.tpch.TpchTableDefinitions.NATION;
-import static io.prestodb.tempto.query.QueryExecutor.query;
+import static io.prestosql.tempto.Requirements.compose;
+import static io.prestosql.tempto.assertions.QueryAssert.Row.row;
+import static io.prestosql.tempto.assertions.QueryAssert.assertThat;
+import static io.prestosql.tempto.fulfillment.table.MutableTablesState.mutableTablesState;
+import static io.prestosql.tempto.fulfillment.table.TableRequirements.mutableTable;
+import static io.prestosql.tempto.fulfillment.table.hive.tpch.TpchTableDefinitions.NATION;
+import static io.prestosql.tempto.query.QueryExecutor.query;
 import static io.prestosql.tests.hive.HiveTableDefinitions.NATION_PARTITIONED_BY_BIGINT_REGIONKEY;
 import static io.prestosql.tests.hive.HiveTableDefinitions.NATION_PARTITIONED_BY_REGIONKEY_NUMBER_OF_LINES_PER_SPLIT;
 import static io.prestosql.tests.utils.QueryExecutors.onHive;
@@ -38,6 +38,7 @@ public class TestExternalHiveTable
 {
     private static final String EXTERNAL_TABLE_NAME = "target_table";
 
+    @Override
     public Requirement getRequirements(Configuration configuration)
     {
         return compose(
@@ -48,7 +49,7 @@ public class TestExternalHiveTable
     @Test
     public void testShowStatisticsForExternalTable()
     {
-        TableInstance nation = mutableTablesState().get(NATION_PARTITIONED_BY_BIGINT_REGIONKEY.getName());
+        TableInstance<?> nation = mutableTablesState().get(NATION_PARTITIONED_BY_BIGINT_REGIONKEY.getName());
         onHive().executeQuery("DROP TABLE IF EXISTS " + EXTERNAL_TABLE_NAME);
         onHive().executeQuery("CREATE EXTERNAL TABLE " + EXTERNAL_TABLE_NAME + " LIKE " + nation.getNameInDatabase() + " LOCATION '/tmp/" + EXTERNAL_TABLE_NAME + "_" + nation.getNameInDatabase() + "'");
         insertNationPartition(nation, 1);
@@ -73,7 +74,7 @@ public class TestExternalHiveTable
     @Test
     public void testAnalyzeExternalTable()
     {
-        TableInstance nation = mutableTablesState().get(NATION_PARTITIONED_BY_BIGINT_REGIONKEY.getName());
+        TableInstance<?> nation = mutableTablesState().get(NATION_PARTITIONED_BY_BIGINT_REGIONKEY.getName());
         onHive().executeQuery("DROP TABLE IF EXISTS " + EXTERNAL_TABLE_NAME);
         onHive().executeQuery("CREATE EXTERNAL TABLE " + EXTERNAL_TABLE_NAME + " LIKE " + nation.getNameInDatabase() + " LOCATION '/tmp/" + EXTERNAL_TABLE_NAME + "_" + nation.getNameInDatabase() + "'");
         insertNationPartition(nation, 1);
@@ -85,7 +86,7 @@ public class TestExternalHiveTable
     @Test
     public void testInsertIntoExternalTable()
     {
-        TableInstance nation = mutableTablesState().get(NATION.getName());
+        TableInstance<?> nation = mutableTablesState().get(NATION.getName());
         onHive().executeQuery("DROP TABLE IF EXISTS " + EXTERNAL_TABLE_NAME);
         onHive().executeQuery("CREATE EXTERNAL TABLE " + EXTERNAL_TABLE_NAME + " LIKE " + nation.getNameInDatabase());
         assertThat(() -> onPresto().executeQuery(
@@ -96,7 +97,7 @@ public class TestExternalHiveTable
     @Test
     public void testDeleteFromExternalTable()
     {
-        TableInstance nation = mutableTablesState().get(NATION.getName());
+        TableInstance<?> nation = mutableTablesState().get(NATION.getName());
         onHive().executeQuery("DROP TABLE IF EXISTS " + EXTERNAL_TABLE_NAME);
         onHive().executeQuery("CREATE EXTERNAL TABLE " + EXTERNAL_TABLE_NAME + " LIKE " + nation.getNameInDatabase());
         assertThat(() -> onPresto().executeQuery("DELETE FROM hive.default." + EXTERNAL_TABLE_NAME))
@@ -106,7 +107,7 @@ public class TestExternalHiveTable
     @Test
     public void testDeleteFromExternalPartitionedTableTable()
     {
-        TableInstance nation = mutableTablesState().get(NATION_PARTITIONED_BY_BIGINT_REGIONKEY.getName());
+        TableInstance<?> nation = mutableTablesState().get(NATION_PARTITIONED_BY_BIGINT_REGIONKEY.getName());
         onHive().executeQuery("DROP TABLE IF EXISTS " + EXTERNAL_TABLE_NAME);
         onHive().executeQuery("CREATE EXTERNAL TABLE " + EXTERNAL_TABLE_NAME + " LIKE " + nation.getNameInDatabase() + " LOCATION '/tmp/" + EXTERNAL_TABLE_NAME + "_" + nation.getNameInDatabase() + "'");
         insertNationPartition(nation, 1);
@@ -126,7 +127,7 @@ public class TestExternalHiveTable
         assertThat(onPresto().executeQuery("SELECT * FROM " + EXTERNAL_TABLE_NAME)).hasRowsCount(0);
     }
 
-    private void insertNationPartition(TableInstance nation, int partition)
+    private void insertNationPartition(TableInstance<?> nation, int partition)
     {
         onHive().executeQuery(
                 "INSERT INTO TABLE " + EXTERNAL_TABLE_NAME + " PARTITION (p_regionkey=" + partition + ")"

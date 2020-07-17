@@ -26,6 +26,7 @@ import io.airlift.slice.SliceOutput;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.connector.ConnectorSession;
+import io.prestosql.spi.function.LiteralParameter;
 import io.prestosql.spi.function.LiteralParameters;
 import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.function.ScalarFunction;
@@ -36,7 +37,6 @@ import io.prestosql.spi.type.SqlDecimal;
 import io.prestosql.spi.type.StandardTypes;
 import io.prestosql.spi.type.Type;
 import io.prestosql.type.JsonPathType;
-import io.prestosql.type.LiteralParameter;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -143,8 +143,7 @@ public final class JsonFunctions
         // If you make changes to this function (e.g. use parse JSON string into some internal representation),
         // make sure `$internal$json_string_to_array/map/row_cast` is changed accordingly.
         try (JsonParser parser = createJsonParser(JSON_FACTORY, slice)) {
-            byte[] in = slice.getBytes();
-            SliceOutput dynamicSliceOutput = new DynamicSliceOutput(in.length);
+            SliceOutput dynamicSliceOutput = new DynamicSliceOutput(slice.length());
             SORTED_MAPPER.writeValue((OutputStream) dynamicSliceOutput, SORTED_MAPPER.readValue(parser, Object.class));
             // nextToken() returns null if the input is parsed correctly,
             // but will throw an exception if there are trailing characters.

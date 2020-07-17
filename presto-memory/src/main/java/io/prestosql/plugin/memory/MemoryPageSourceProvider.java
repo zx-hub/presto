@@ -13,18 +13,25 @@
  */
 package io.prestosql.plugin.memory;
 
+import com.google.common.collect.ImmutableList;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.connector.ConnectorPageSourceProvider;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorSplit;
+import io.prestosql.spi.connector.ConnectorTableHandle;
 import io.prestosql.spi.connector.ConnectorTransactionHandle;
 import io.prestosql.spi.connector.FixedPageSource;
+import io.prestosql.spi.predicate.Domain;
+import io.prestosql.spi.predicate.TupleDomain;
+import io.prestosql.spi.type.TypeUtils;
 
 import javax.inject.Inject;
 
 import java.util.List;
+import java.util.Map;
+import java.util.OptionalDouble;
 
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
@@ -42,16 +49,28 @@ public final class MemoryPageSourceProvider
 
     @Override
     public ConnectorPageSource createPageSource(
-            ConnectorTransactionHandle transactionHandle,
+            ConnectorTransactionHandle transaction,
             ConnectorSession session,
             ConnectorSplit split,
-            List<ColumnHandle> columns)
+            ConnectorTableHandle table,
+            List<ColumnHandle> columns,
+            TupleDomain<ColumnHandle> dynamicFilter)
     {
         MemorySplit memorySplit = (MemorySplit) split;
-        long tableId = memorySplit.getTableHandle().getTableId();
+        long tableId = memorySplit.getTable();
         int partNumber = memorySplit.getPartNumber();
         int totalParts = memorySplit.getTotalPartsPerWorker();
         long expectedRows = memorySplit.getExpectedRows();
+        MemoryTableHandle memoryTable = (MemoryTableHandle) table;
+        OptionalDouble sampleRatio = memoryTable.getSampleRatio();
+
+        if (dynamicFilter.isNone()) {
+            return new FixedPageSource(ImmutableList.of());
+        }
+        Map<Integer, Domain> domains = dynamicFilter
+                .transform(columns::indexOf)
+                .getDomains()
+                .get();
 
         List<Integer> columnIndexes = columns.stream()
                 .map(MemoryColumnHandle.class::cast)
@@ -61,8 +80,37 @@ public final class MemoryPageSourceProvider
                 partNumber,
                 totalParts,
                 columnIndexes,
-                expectedRows);
+                expectedRows,
+                memorySplit.getLimit(),
+                sampleRatio);
+        return new FixedPageSource(pages.stream()
+                .map(page -> applyFilter(page, domains))
+                .collect(toList()));
+    }
 
-        return new FixedPageSource(pages);
+    private Page applyFilter(Page page, Map<Integer, Domain> domains)
+    {
+        int[] positions = new int[page.getPositionCount()];
+        int length = 0;
+        for (int position = 0; position < page.getPositionCount(); ++position) {
+            if (positionMatchesPredicate(page, position, domains)) {
+                positions[length++] = position;
+            }
+        }
+        return page.getPositions(positions, 0, length);
+    }
+
+    private boolean positionMatchesPredicate(Page page, int position, Map<Integer, Domain> domains)
+    {
+        for (Map.Entry<Integer, Domain> entry : domains.entrySet()) {
+            int channel = entry.getKey();
+            Domain domain = entry.getValue();
+            Object value = TypeUtils.readNativeValue(domain.getType(), page.getBlock(channel), position);
+            if (!domain.includesNullableValue(value)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

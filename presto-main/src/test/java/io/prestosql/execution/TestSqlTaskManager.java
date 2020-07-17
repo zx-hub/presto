@@ -29,9 +29,9 @@ import io.prestosql.execution.executor.TaskExecutor;
 import io.prestosql.memory.LocalMemoryManager;
 import io.prestosql.memory.NodeMemoryConfig;
 import io.prestosql.memory.context.LocalMemoryContext;
+import io.prestosql.metadata.InternalNode;
 import io.prestosql.operator.ExchangeClient;
 import io.prestosql.operator.ExchangeClientSupplier;
-import io.prestosql.spi.Node;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spiller.LocalSpillManager;
 import io.prestosql.spiller.NodeSpillConfig;
@@ -116,13 +116,13 @@ public class TestSqlTaskManager
             taskInfo = sqlTaskManager.getTaskInfo(taskId);
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
-            BufferResult results = sqlTaskManager.getTaskResults(taskId, OUT, 0, new DataSize(1, Unit.MEGABYTE)).get();
+            BufferResult results = sqlTaskManager.getTaskResults(taskId, OUT, 0, DataSize.of(1, Unit.MEGABYTE)).get();
             assertEquals(results.isBufferComplete(), false);
             assertEquals(results.getSerializedPages().size(), 1);
             assertEquals(results.getSerializedPages().get(0).getPositionCount(), 1);
 
             for (boolean moreResults = true; moreResults; moreResults = !results.isBufferComplete()) {
-                results = sqlTaskManager.getTaskResults(taskId, OUT, results.getToken() + results.getSerializedPages().size(), new DataSize(1, Unit.MEGABYTE)).get();
+                results = sqlTaskManager.getTaskResults(taskId, OUT, results.getToken() + results.getSerializedPages().size(), DataSize.of(1, Unit.MEGABYTE)).get();
             }
             assertEquals(results.isBufferComplete(), true);
             assertEquals(results.getSerializedPages().size(), 0);
@@ -231,7 +231,7 @@ public class TestSqlTaskManager
         }
     }
 
-    public SqlTaskManager createSqlTaskManager(TaskManagerConfig config)
+    private SqlTaskManager createSqlTaskManager(TaskManagerConfig config)
     {
         return new SqlTaskManager(
                 createTestingPlanner(),
@@ -290,25 +290,19 @@ public class TestSqlTaskManager
         }
 
         @Override
-        public URI createStageLocation(StageId stageId)
-        {
-            return URI.create("http://fake.invalid/stage/" + stageId);
-        }
-
-        @Override
         public URI createLocalTaskLocation(TaskId taskId)
         {
             return URI.create("http://fake.invalid/task/" + taskId);
         }
 
         @Override
-        public URI createTaskLocation(Node node, TaskId taskId)
+        public URI createTaskLocation(InternalNode node, TaskId taskId)
         {
             return URI.create("http://fake.invalid/task/" + node.getNodeIdentifier() + "/" + taskId);
         }
 
         @Override
-        public URI createMemoryInfoLocation(Node node)
+        public URI createMemoryInfoLocation(InternalNode node)
         {
             return URI.create("http://fake.invalid/" + node.getNodeIdentifier() + "/memory");
         }

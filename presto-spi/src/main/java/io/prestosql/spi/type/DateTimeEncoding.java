@@ -19,15 +19,17 @@ import static java.util.Objects.requireNonNull;
 
 public final class DateTimeEncoding
 {
-    private DateTimeEncoding()
-    {
-    }
+    private DateTimeEncoding() {}
 
     private static final int TIME_ZONE_MASK = 0xFFF;
     private static final int MILLIS_SHIFT = 12;
 
     private static long pack(long millisUtc, short timeZoneKey)
     {
+        if (millisUtc << MILLIS_SHIFT >> MILLIS_SHIFT != millisUtc) {
+            throw new IllegalArgumentException("Millis overflow: " + millisUtc);
+        }
+
         return (millisUtc << MILLIS_SHIFT) | (timeZoneKey & TIME_ZONE_MASK);
     }
 
@@ -45,6 +47,11 @@ public final class DateTimeEncoding
     {
         requireNonNull(timeZoneKey, "timeZoneKey is null");
         return pack(millisUtc, timeZoneKey.getKey());
+    }
+
+    public static long packDateTimeWithZone(long millisUtc, short timeZoneKey)
+    {
+        return pack(millisUtc, timeZoneKey);
     }
 
     public static long unpackMillisUtc(long dateTimeWithTimeZone)

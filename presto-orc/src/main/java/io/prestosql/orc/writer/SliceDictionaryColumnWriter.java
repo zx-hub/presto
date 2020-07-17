@@ -19,12 +19,12 @@ import io.airlift.slice.Slice;
 import io.airlift.units.DataSize;
 import io.prestosql.array.IntBigArray;
 import io.prestosql.orc.DictionaryCompressionOptimizer.DictionaryColumn;
-import io.prestosql.orc.OrcEncoding;
 import io.prestosql.orc.checkpoint.BooleanStreamCheckpoint;
 import io.prestosql.orc.checkpoint.LongStreamCheckpoint;
 import io.prestosql.orc.metadata.ColumnEncoding;
 import io.prestosql.orc.metadata.CompressedMetadataWriter;
 import io.prestosql.orc.metadata.CompressionKind;
+import io.prestosql.orc.metadata.OrcColumnId;
 import io.prestosql.orc.metadata.RowGroupIndex;
 import io.prestosql.orc.metadata.Stream;
 import io.prestosql.orc.metadata.Stream.StreamKind;
@@ -32,14 +32,12 @@ import io.prestosql.orc.metadata.statistics.ColumnStatistics;
 import io.prestosql.orc.metadata.statistics.StringStatisticsBuilder;
 import io.prestosql.orc.stream.ByteArrayOutputStream;
 import io.prestosql.orc.stream.LongOutputStream;
-import io.prestosql.orc.stream.LongOutputStreamV1;
 import io.prestosql.orc.stream.LongOutputStreamV2;
 import io.prestosql.orc.stream.PresentOutputStream;
 import io.prestosql.orc.stream.StreamDataOutput;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.DictionaryBlock;
 import io.prestosql.spi.type.Type;
-import it.unimi.dsi.fastutil.ints.AbstractIntComparator;
 import it.unimi.dsi.fastutil.ints.IntArrays;
 import org.openjdk.jol.info.ClassLayout;
 
@@ -54,8 +52,6 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.prestosql.orc.DictionaryCompressionOptimizer.estimateIndexBytesPerValue;
-import static io.prestosql.orc.OrcEncoding.DWRF;
-import static io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind.DICTIONARY;
 import static io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind.DICTIONARY_V2;
 import static io.prestosql.orc.metadata.CompressionKind.NONE;
 import static io.prestosql.orc.metadata.Stream.StreamKind.DATA;
@@ -68,13 +64,12 @@ public class SliceDictionaryColumnWriter
         implements ColumnWriter, DictionaryColumn
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(SliceDictionaryColumnWriter.class).instanceSize();
-    private static final int DIRECT_CONVERSION_CHUNK_MAX_LOGICAL_BYTES = toIntExact(new DataSize(32, MEGABYTE).toBytes());
+    private static final int DIRECT_CONVERSION_CHUNK_MAX_LOGICAL_BYTES = toIntExact(DataSize.of(32, MEGABYTE).toBytes());
 
-    private final int column;
+    private final OrcColumnId columnId;
     private final Type type;
     private final CompressionKind compression;
     private final int bufferSize;
-    private final OrcEncoding orcEncoding;
     private final int stringStatisticsLimitInBytes;
 
     private final LongOutputStream dataStream;
@@ -101,26 +96,17 @@ public class SliceDictionaryColumnWriter
     private boolean directEncoded;
     private SliceDirectColumnWriter directColumnWriter;
 
-    public SliceDictionaryColumnWriter(int column, Type type, CompressionKind compression, int bufferSize, OrcEncoding orcEncoding, DataSize stringStatisticsLimit)
+    public SliceDictionaryColumnWriter(OrcColumnId columnId, Type type, CompressionKind compression, int bufferSize, DataSize stringStatisticsLimit)
     {
-        checkArgument(column >= 0, "column is negative");
-        this.column = column;
+        this.columnId = requireNonNull(columnId, "columnId is null");
         this.type = requireNonNull(type, "type is null");
         this.compression = requireNonNull(compression, "compression is null");
         this.bufferSize = bufferSize;
-        this.orcEncoding = requireNonNull(orcEncoding, "orcEncoding is null");
         this.stringStatisticsLimitInBytes = toIntExact(requireNonNull(stringStatisticsLimit, "stringStatisticsLimit is null").toBytes());
-        LongOutputStream result;
-        if (orcEncoding == DWRF) {
-            result = new LongOutputStreamV1(compression, bufferSize, false, DATA);
-        }
-        else {
-            result = new LongOutputStreamV2(compression, bufferSize, false, DATA);
-        }
-        this.dataStream = result;
+        this.dataStream = new LongOutputStreamV2(compression, bufferSize, false, DATA);
         this.presentStream = new PresentOutputStream(compression, bufferSize);
         this.dictionaryDataStream = new ByteArrayOutputStream(compression, bufferSize, StreamKind.DICTIONARY_DATA);
-        this.dictionaryLengthStream = createLengthOutputStream(compression, bufferSize, orcEncoding);
+        this.dictionaryLengthStream = createLengthOutputStream(compression, bufferSize);
         values = new IntBigArray();
         this.statisticsBuilder = newStringStatisticsBuilder();
     }
@@ -173,7 +159,7 @@ public class SliceDictionaryColumnWriter
         checkState(!closed);
         checkState(!directEncoded);
         if (directColumnWriter == null) {
-            directColumnWriter = new SliceDirectColumnWriter(column, type, compression, bufferSize, orcEncoding, this::newStringStatisticsBuilder);
+            directColumnWriter = new SliceDirectColumnWriter(columnId, type, compression, bufferSize, this::newStringStatisticsBuilder);
         }
         checkState(directColumnWriter.getBufferedBytes() == 0);
 
@@ -259,13 +245,13 @@ public class SliceDictionaryColumnWriter
     }
 
     @Override
-    public Map<Integer, ColumnEncoding> getColumnEncodings()
+    public Map<OrcColumnId, ColumnEncoding> getColumnEncodings()
     {
         checkState(closed);
         if (directEncoded) {
             return directColumnWriter.getColumnEncodings();
         }
-        return ImmutableMap.of(column, columnEncoding);
+        return ImmutableMap.of(columnId, columnEncoding);
     }
 
     @Override
@@ -309,7 +295,7 @@ public class SliceDictionaryColumnWriter
     }
 
     @Override
-    public Map<Integer, ColumnStatistics> finishRowGroup()
+    public Map<OrcColumnId, ColumnStatistics> finishRowGroup()
     {
         checkState(!closed);
         checkState(inRowGroup);
@@ -324,7 +310,7 @@ public class SliceDictionaryColumnWriter
         rowGroupValueCount = 0;
         statisticsBuilder = newStringStatisticsBuilder();
         values = new IntBigArray();
-        return ImmutableMap.of(column, statistics);
+        return ImmutableMap.of(columnId, statistics);
     }
 
     @Override
@@ -342,14 +328,14 @@ public class SliceDictionaryColumnWriter
     }
 
     @Override
-    public Map<Integer, ColumnStatistics> getColumnStripeStatistics()
+    public Map<OrcColumnId, ColumnStatistics> getColumnStripeStatistics()
     {
         checkState(closed);
         if (directEncoded) {
             return directColumnWriter.getColumnStripeStatistics();
         }
 
-        return ImmutableMap.of(column, ColumnStatistics.mergeColumnStatistics(rowGroups.stream()
+        return ImmutableMap.of(columnId, ColumnStatistics.mergeColumnStatistics(rowGroups.stream()
                 .map(DictionaryRowGroup::getColumnStatistics)
                 .collect(toList())));
     }
@@ -371,7 +357,7 @@ public class SliceDictionaryColumnWriter
                 dictionaryDataStream.writeSlice(value);
             }
         }
-        columnEncoding = new ColumnEncoding(orcEncoding == DWRF ? DICTIONARY : DICTIONARY_V2, dictionaryElements.getPositionCount() - 1);
+        columnEncoding = new ColumnEncoding(DICTIONARY_V2, dictionaryElements.getPositionCount() - 1);
 
         // build index from original dictionary index to new sorted position
         int[] originalDictionaryToSortedIndex = new int[sortedDictionaryIndexes.length];
@@ -421,32 +407,26 @@ public class SliceDictionaryColumnWriter
             sortedPositions[i] = i;
         }
 
-        IntArrays.quickSort(sortedPositions, 0, sortedPositions.length, new AbstractIntComparator()
-        {
-            @Override
-            public int compare(int left, int right)
-            {
-                boolean nullLeft = elementBlock.isNull(left);
-                boolean nullRight = elementBlock.isNull(right);
-                if (nullLeft && nullRight) {
-                    return 0;
-                }
-                if (nullLeft) {
-                    return 1;
-                }
-                if (nullRight) {
-                    return -1;
-                }
-
-                return elementBlock.compareTo(
-                        left,
-                        0,
-                        elementBlock.getSliceLength(left),
-                        elementBlock,
-                        right,
-                        0,
-                        elementBlock.getSliceLength(right));
+        IntArrays.quickSort(sortedPositions, 0, sortedPositions.length, (int left, int right) -> {
+            boolean nullLeft = elementBlock.isNull(left);
+            boolean nullRight = elementBlock.isNull(right);
+            if (nullLeft && nullRight) {
+                return 0;
             }
+            if (nullLeft) {
+                return 1;
+            }
+            if (nullRight) {
+                return -1;
+            }
+            return elementBlock.compareTo(
+                    left,
+                    0,
+                    elementBlock.getSliceLength(left),
+                    elementBlock,
+                    right,
+                    0,
+                    elementBlock.getSliceLength(right));
         });
 
         return sortedPositions;
@@ -476,7 +456,7 @@ public class SliceDictionaryColumnWriter
         }
 
         Slice slice = metadataWriter.writeRowIndexes(rowGroupIndexes.build());
-        Stream stream = new Stream(column, StreamKind.ROW_INDEX, slice.length(), false);
+        Stream stream = new Stream(columnId, StreamKind.ROW_INDEX, slice.length(), false);
         return ImmutableList.of(new StreamDataOutput(slice, stream));
     }
 
@@ -502,10 +482,10 @@ public class SliceDictionaryColumnWriter
 
         // actually write data
         ImmutableList.Builder<StreamDataOutput> outputDataStreams = ImmutableList.builder();
-        presentStream.getStreamDataOutput(column).ifPresent(outputDataStreams::add);
-        outputDataStreams.add(dataStream.getStreamDataOutput(column));
-        outputDataStreams.add(dictionaryLengthStream.getStreamDataOutput(column));
-        outputDataStreams.add(dictionaryDataStream.getStreamDataOutput(column));
+        presentStream.getStreamDataOutput(columnId).ifPresent(outputDataStreams::add);
+        outputDataStreams.add(dataStream.getStreamDataOutput(columnId));
+        outputDataStreams.add(dictionaryLengthStream.getStreamDataOutput(columnId));
+        outputDataStreams.add(dictionaryDataStream.getStreamDataOutput(columnId));
         return outputDataStreams.build();
     }
 

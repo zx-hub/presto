@@ -24,7 +24,7 @@ import io.airlift.slice.Slice;
 import io.airlift.testing.TestingTicker;
 import io.airlift.units.Duration;
 import io.prestosql.client.NodeVersion;
-import io.prestosql.metadata.PrestoNode;
+import io.prestosql.metadata.InternalNode;
 import io.prestosql.plugin.raptor.legacy.NodeSupplier;
 import io.prestosql.plugin.raptor.legacy.RaptorColumnHandle;
 import io.prestosql.plugin.raptor.legacy.util.DaoSupplier;
@@ -61,8 +61,8 @@ import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 
-import static com.google.common.base.Strings.repeat;
 import static com.google.common.base.Ticker.systemTicker;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.collect.Iterators.concat;
@@ -106,14 +106,14 @@ public class TestDatabaseShardManager
     @BeforeMethod
     public void setup()
     {
-        dbi = new DBI("jdbc:h2:mem:test" + System.nanoTime());
+        dbi = new DBI("jdbc:h2:mem:test" + System.nanoTime() + ThreadLocalRandom.current().nextLong());
         dummyHandle = dbi.open();
         createTablesWithRetry(dbi);
         dataDir = Files.createTempDir();
         shardManager = createShardManager(dbi);
     }
 
-    @AfterMethod
+    @AfterMethod(alwaysRun = true)
     public void teardown()
             throws IOException
     {
@@ -503,12 +503,12 @@ public class TestDatabaseShardManager
                 .add(new ColumnInfo(7, VARBINARY))
                 .build();
 
-        RaptorColumnHandle c1 = new RaptorColumnHandle("raptor", "c1", 1, BIGINT);
-        RaptorColumnHandle c2 = new RaptorColumnHandle("raptor", "c2", 2, DOUBLE);
-        RaptorColumnHandle c3 = new RaptorColumnHandle("raptor", "c3", 3, DATE);
-        RaptorColumnHandle c4 = new RaptorColumnHandle("raptor", "c4", 4, TIMESTAMP);
-        RaptorColumnHandle c5 = new RaptorColumnHandle("raptor", "c5", 5, createVarcharType(10));
-        RaptorColumnHandle c6 = new RaptorColumnHandle("raptor", "c6", 6, BOOLEAN);
+        RaptorColumnHandle c1 = new RaptorColumnHandle("c1", 1, BIGINT);
+        RaptorColumnHandle c2 = new RaptorColumnHandle("c2", 2, DOUBLE);
+        RaptorColumnHandle c3 = new RaptorColumnHandle("c3", 3, DATE);
+        RaptorColumnHandle c4 = new RaptorColumnHandle("c4", 4, TIMESTAMP);
+        RaptorColumnHandle c5 = new RaptorColumnHandle("c5", 5, createVarcharType(10));
+        RaptorColumnHandle c6 = new RaptorColumnHandle("c6", 6, BOOLEAN);
 
         long tableId = createTable("test");
         shardManager.createTable(tableId, columns, false, OptionalLong.empty());
@@ -598,7 +598,7 @@ public class TestDatabaseShardManager
     @Test
     public void testShardPruningTruncatedValues()
     {
-        String prefix = repeat("x", MAX_BINARY_INDEX_SIZE);
+        String prefix = "x".repeat(MAX_BINARY_INDEX_SIZE);
 
         ColumnStats stats = new ColumnStats(1, prefix + "a", prefix + "z");
         ShardInfo shard = shardInfo(UUID.randomUUID(), "node", ImmutableList.of(stats));
@@ -606,7 +606,7 @@ public class TestDatabaseShardManager
         List<ShardInfo> shards = ImmutableList.of(shard);
 
         List<ColumnInfo> columns = ImmutableList.of(new ColumnInfo(1, createVarcharType(10)));
-        RaptorColumnHandle c1 = new RaptorColumnHandle("raptor", "c1", 1, createVarcharType(10));
+        RaptorColumnHandle c1 = new RaptorColumnHandle("c1", 1, createVarcharType(10));
 
         long tableId = createTable("test");
         shardManager.createTable(tableId, columns, false, OptionalLong.empty());
@@ -642,7 +642,7 @@ public class TestDatabaseShardManager
 
         long tableId = createTable("test");
         List<ColumnInfo> columns = ImmutableList.of(new ColumnInfo(1, BIGINT));
-        RaptorColumnHandle c1 = new RaptorColumnHandle("raptor", "c1", 1, BIGINT);
+        RaptorColumnHandle c1 = new RaptorColumnHandle("c1", 1, BIGINT);
 
         shardManager.createTable(tableId, columns, false, OptionalLong.empty());
 
@@ -821,7 +821,7 @@ public class TestDatabaseShardManager
 
     private static Node createTestingNode()
     {
-        return new PrestoNode(UUID.randomUUID().toString(), URI.create("http://test"), NodeVersion.UNKNOWN, false);
+        return new InternalNode(UUID.randomUUID().toString(), URI.create("http://test"), NodeVersion.UNKNOWN, false);
     }
 
     private int columnCount(long tableId)

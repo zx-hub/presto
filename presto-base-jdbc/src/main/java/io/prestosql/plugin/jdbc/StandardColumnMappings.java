@@ -16,6 +16,7 @@ package io.prestosql.plugin.jdbc;
 import com.google.common.base.CharMatcher;
 import com.google.common.primitives.Shorts;
 import com.google.common.primitives.SignedBytes;
+import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.type.CharType;
 import io.prestosql.spi.type.DecimalType;
 import io.prestosql.spi.type.Decimals;
@@ -26,12 +27,18 @@ import org.joda.time.chrono.ISOChronology;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.MathContext;
+import java.math.RoundingMode;
 import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -61,16 +68,16 @@ import static java.lang.Float.intBitsToFloat;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 import static java.lang.Math.toIntExact;
+import static java.math.RoundingMode.UNNECESSARY;
+import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.DAYS;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static org.joda.time.DateTimeZone.UTC;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 public final class StandardColumnMappings
 {
     private StandardColumnMappings() {}
-
-    private static final ISOChronology UTC_CHRONOLOGY = ISOChronology.getInstanceUTC();
 
     public static ColumnMapping booleanColumnMapping()
     {
@@ -142,7 +149,7 @@ public final class StandardColumnMappings
         return PreparedStatement::setDouble;
     }
 
-    public static ColumnMapping decimalColumnMapping(DecimalType decimalType)
+    public static ColumnMapping decimalColumnMapping(DecimalType decimalType, RoundingMode roundingMode)
     {
         // JDBC driver can return BigDecimal with lower scale than column's scale when there are trailing zeroes
         int scale = decimalType.getScale();
@@ -154,7 +161,7 @@ public final class StandardColumnMappings
         }
         return ColumnMapping.sliceMapping(
                 decimalType,
-                (resultSet, columnIndex) -> encodeScaledValue(resultSet.getBigDecimal(columnIndex), scale),
+                (resultSet, columnIndex) -> encodeScaledValue(resultSet.getBigDecimal(columnIndex).setScale(scale, roundingMode)),
                 longDecimalWriteFunction(decimalType));
     }
 
@@ -183,10 +190,12 @@ public final class StandardColumnMappings
     public static ColumnMapping charColumnMapping(CharType charType)
     {
         requireNonNull(charType, "charType is null");
-        return ColumnMapping.sliceMapping(
-                charType,
-                (resultSet, columnIndex) -> utf8Slice(CharMatcher.is(' ').trimTrailingFrom(resultSet.getString(columnIndex))),
-                charWriteFunction());
+        return ColumnMapping.sliceMapping(charType, charReadFunction(), charWriteFunction());
+    }
+
+    public static SliceReadFunction charReadFunction()
+    {
+        return (resultSet, columnIndex) -> utf8Slice(CharMatcher.is(' ').trimTrailingFrom(resultSet.getString(columnIndex)));
     }
 
     public static SliceWriteFunction charWriteFunction()
@@ -198,7 +207,12 @@ public final class StandardColumnMappings
 
     public static ColumnMapping varcharColumnMapping(VarcharType varcharType)
     {
-        return ColumnMapping.sliceMapping(varcharType, (resultSet, columnIndex) -> utf8Slice(resultSet.getString(columnIndex)), varcharWriteFunction());
+        return ColumnMapping.sliceMapping(varcharType, varcharReadFunction(), varcharWriteFunction());
+    }
+
+    public static SliceReadFunction varcharReadFunction()
+    {
+        return (resultSet, columnIndex) -> utf8Slice(resultSet.getString(columnIndex));
     }
 
     public static SliceWriteFunction varcharWriteFunction()
@@ -235,7 +249,7 @@ public final class StandardColumnMappings
                      */
                     long localMillis = resultSet.getDate(columnIndex).getTime();
                     // Convert it to a ~midnight in UTC.
-                    long utcMillis = ISOChronology.getInstance().getZone().getMillisKeepLocal(UTC, localMillis);
+                    long utcMillis = ISOChronology.getInstance().getZone().getMillisKeepLocal(DateTimeZone.UTC, localMillis);
                     // convert to days
                     return MILLISECONDS.toDays(utcMillis);
                 },
@@ -247,62 +261,200 @@ public final class StandardColumnMappings
         return (statement, index, value) -> {
             // convert to midnight in default time zone
             long millis = DAYS.toMillis(value);
-            statement.setDate(index, new Date(UTC.getMillisKeepLocal(DateTimeZone.getDefault(), millis)));
+            statement.setDate(index, new Date(DateTimeZone.UTC.getMillisKeepLocal(DateTimeZone.getDefault(), millis)));
         };
     }
 
-    public static ColumnMapping timeColumnMapping()
+    /**
+     * @deprecated This method uses {@link java.sql.Time} and the class cannot represent time value when JVM zone had
+     * forward offset change (a 'gap') at given time on 1970-01-01. If driver only supports {@link LocalTime}, use
+     * {@link #timeColumnMapping} instead.
+     */
+    @Deprecated
+    public static ColumnMapping timeColumnMappingUsingSqlTime(ConnectorSession session)
     {
+        if (session.isLegacyTimestamp()) {
+            ZoneId sessionZone = ZoneId.of(session.getTimeZoneKey().getId());
+            return ColumnMapping.longMapping(
+                    TIME,
+                    (resultSet, columnIndex) -> {
+                        Time time = resultSet.getTime(columnIndex);
+                        return toPrestoLegacyTimestamp(toLocalTime(time).atDate(LocalDate.ofEpochDay(0)), sessionZone);
+                    },
+                    timeWriteFunctionUsingSqlTime(session));
+        }
+
         return ColumnMapping.longMapping(
                 TIME,
                 (resultSet, columnIndex) -> {
-                    /*
-                     * TODO `resultSet.getTime(columnIndex)` returns wrong value if JVM's zone had forward offset change during 1970-01-01
-                     * and the time value being retrieved was not present in local time (a 'gap'), e.g. time retrieved is 00:10:00 and JVM zone is America/Hermosillo
-                     * The problem can be averted by using `resultSet.getObject(columnIndex, LocalTime.class)` -- but this is not universally supported by JDBC drivers.
-                     */
                     Time time = resultSet.getTime(columnIndex);
-                    return UTC_CHRONOLOGY.millisOfDay().get(time.getTime());
+                    return NANOSECONDS.toMillis(toLocalTime(time).toNanoOfDay());
                 },
-                timeWriteFunction());
+                timeWriteFunctionUsingSqlTime(session));
     }
 
-    public static LongWriteFunction timeWriteFunction()
+    private static LocalTime toLocalTime(Time sqlTime)
     {
-        return (statement, index, value) -> {
-            // Copied from `QueryBuilder.buildSql`
-            // TODO verify correctness, add tests and support non-legacy timestamp
-            statement.setTime(index, new Time(value));
-        };
+        // Time.toLocalTime() does not preserve second fraction
+        return sqlTime.toLocalTime()
+                // TODO is the conversion correct if sqlTime.getTime() < 0?
+                .withNano(toIntExact(MILLISECONDS.toNanos(sqlTime.getTime() % 1000)));
     }
 
-    public static ColumnMapping timestampColumnMapping()
+    /**
+     * @deprecated This method uses {@link java.sql.Time} and the class cannot represent time value when JVM zone had
+     * forward offset change (a 'gap') at given time on 1970-01-01. If driver only supports {@link LocalTime}, use
+     * {@link #timeWriteFunction} instead.
+     */
+    @Deprecated
+    public static LongWriteFunction timeWriteFunctionUsingSqlTime(ConnectorSession session)
     {
+        if (session.isLegacyTimestamp()) {
+            ZoneId sessionZone = ZoneId.of(session.getTimeZoneKey().getId());
+            return (statement, index, value) -> statement.setTime(index, toSqlTime(fromPrestoLegacyTimestamp(value, sessionZone).toLocalTime()));
+        }
+        return (statement, index, value) -> statement.setTime(index, toSqlTime(fromPrestoTimestamp(value).toLocalTime()));
+    }
+
+    private static Time toSqlTime(LocalTime localTime)
+    {
+        // Time.valueOf does not preserve second fraction
+        return new Time(Time.valueOf(localTime).getTime() + NANOSECONDS.toMillis(localTime.getNano()));
+    }
+
+    public static ColumnMapping timeColumnMapping(ConnectorSession session)
+    {
+        if (session.isLegacyTimestamp()) {
+            ZoneId sessionZone = ZoneId.of(session.getTimeZoneKey().getId());
+            return ColumnMapping.longMapping(
+                    TIME,
+                    (resultSet, columnIndex) -> {
+                        LocalTime time = resultSet.getObject(columnIndex, LocalTime.class);
+                        return toPrestoLegacyTimestamp(time.atDate(LocalDate.ofEpochDay(0)), sessionZone);
+                    },
+                    timeWriteFunction(session));
+        }
+
+        return ColumnMapping.longMapping(
+                TIME,
+                (resultSet, columnIndex) -> {
+                    LocalTime time = resultSet.getObject(columnIndex, LocalTime.class);
+                    return NANOSECONDS.toMillis(time.toNanoOfDay());
+                },
+                timeWriteFunction(session));
+    }
+
+    public static LongWriteFunction timeWriteFunction(ConnectorSession session)
+    {
+        if (session.isLegacyTimestamp()) {
+            ZoneId sessionZone = ZoneId.of(session.getTimeZoneKey().getId());
+            return (statement, index, value) -> statement.setObject(index, fromPrestoLegacyTimestamp(value, sessionZone).toLocalTime());
+        }
+        return (statement, index, value) -> statement.setObject(index, fromPrestoTimestamp(value).toLocalTime());
+    }
+
+    /**
+     * @deprecated This method uses {@link java.sql.Timestamp} and the class cannot represent date-time value when JVM zone had
+     * forward offset change (a 'gap'). This includes regular DST changes (e.g. Europe/Warsaw) and one-time policy changes
+     * (Asia/Kathmandu's shift by 15 minutes on January 1, 1986, 00:00:00). If driver only supports {@link LocalDateTime}, use
+     * {@link #timestampColumnMapping} instead.
+     */
+    @Deprecated
+    public static ColumnMapping timestampColumnMappingUsingSqlTimestamp(ConnectorSession session)
+    {
+        if (session.isLegacyTimestamp()) {
+            ZoneId sessionZone = ZoneId.of(session.getTimeZoneKey().getId());
+            return ColumnMapping.longMapping(
+                    TIMESTAMP,
+                    (resultSet, columnIndex) -> {
+                        Timestamp timestamp = resultSet.getTimestamp(columnIndex);
+                        return toPrestoLegacyTimestamp(timestamp.toLocalDateTime(), sessionZone);
+                    },
+                    timestampWriteFunctionUsingSqlTimestamp(session));
+        }
+
         return ColumnMapping.longMapping(
                 TIMESTAMP,
                 (resultSet, columnIndex) -> {
-                    /*
-                     * TODO `resultSet.getTimestamp(columnIndex)` returns wrong value if JVM's zone had forward offset change and the local time
-                     * corresponding to timestamp value being retrieved was not present (a 'gap'), this includes regular DST changes (e.g. Europe/Warsaw)
-                     * and one-time policy changes (Asia/Kathmandu's shift by 15 minutes on January 1, 1986, 00:00:00).
-                     * The problem can be averted by using `resultSet.getObject(columnIndex, LocalDateTime.class)` -- but this is not universally supported by JDBC drivers.
-                     */
                     Timestamp timestamp = resultSet.getTimestamp(columnIndex);
-                    return timestamp.getTime();
+                    return toPrestoTimestamp(timestamp.toLocalDateTime());
                 },
-                timestampWriteFunction());
+                timestampWriteFunctionUsingSqlTimestamp(session));
     }
 
-    public static LongWriteFunction timestampWriteFunction()
+    public static ColumnMapping timestampColumnMapping(ConnectorSession session)
     {
+        return ColumnMapping.longMapping(
+                TIMESTAMP,
+                timestampReadFunction(session),
+                timestampWriteFunction(session));
+    }
+
+    public static LongReadFunction timestampReadFunction(ConnectorSession session)
+    {
+        if (session.isLegacyTimestamp()) {
+            ZoneId sessionZone = ZoneId.of(session.getTimeZoneKey().getId());
+            return (resultSet, columnIndex) -> toPrestoLegacyTimestamp(resultSet.getObject(columnIndex, LocalDateTime.class), sessionZone);
+        }
+        return (resultSet, columnIndex) -> toPrestoTimestamp(resultSet.getObject(columnIndex, LocalDateTime.class));
+    }
+
+    /**
+     * @deprecated This method uses {@link java.sql.Timestamp} and the class cannot represent date-time value when JVM zone had
+     * forward offset change (a 'gap'). This includes regular DST changes (e.g. Europe/Warsaw) and one-time policy changes
+     * (Asia/Kathmandu's shift by 15 minutes on January 1, 1986, 00:00:00). If driver only supports {@link LocalDateTime}, use
+     * {@link #timestampWriteFunction} instead.
+     */
+    @Deprecated
+    public static LongWriteFunction timestampWriteFunctionUsingSqlTimestamp(ConnectorSession connectorSession)
+    {
+        if (connectorSession.isLegacyTimestamp()) {
+            ZoneId sessionZone = ZoneId.of(connectorSession.getTimeZoneKey().getId());
+            return (statement, index, value) -> statement.setTimestamp(index, Timestamp.valueOf(fromPrestoLegacyTimestamp(value, sessionZone)));
+        }
+        return (statement, index, value) -> statement.setTimestamp(index, Timestamp.valueOf(fromPrestoTimestamp(value)));
+    }
+
+    public static LongWriteFunction timestampWriteFunction(ConnectorSession session)
+    {
+        if (session.isLegacyTimestamp()) {
+            ZoneId sessionZone = ZoneId.of(session.getTimeZoneKey().getId());
+            return (statement, index, value) -> statement.setObject(index, fromPrestoLegacyTimestamp(value, sessionZone));
+        }
         return (statement, index, value) -> {
-            // Copied from `QueryBuilder.buildSql`
-            // TODO verify correctness, add tests and support non-legacy timestamp
-            statement.setTimestamp(index, new Timestamp(value));
+            statement.setObject(index, fromPrestoTimestamp(value));
         };
     }
 
-    public static Optional<ColumnMapping> jdbcTypeToPrestoType(JdbcTypeHandle type)
+    /**
+     * @deprecated applicable in legacy timestamp semantics only
+     */
+    @Deprecated
+    public static long toPrestoLegacyTimestamp(LocalDateTime localDateTime, ZoneId sessionZone)
+    {
+        return localDateTime.atZone(sessionZone).toInstant().toEpochMilli();
+    }
+
+    public static long toPrestoTimestamp(LocalDateTime localDateTime)
+    {
+        return localDateTime.atZone(UTC).toInstant().toEpochMilli();
+    }
+
+    /**
+     * @deprecated applicable in legacy timestamp semantics only
+     */
+    @Deprecated
+    public static LocalDateTime fromPrestoLegacyTimestamp(long value, ZoneId sessionZone)
+    {
+        return Instant.ofEpochMilli(value).atZone(sessionZone).toLocalDateTime();
+    }
+
+    public static LocalDateTime fromPrestoTimestamp(long value)
+    {
+        return Instant.ofEpochMilli(value).atZone(UTC).toLocalDateTime();
+    }
+
+    public static Optional<ColumnMapping> jdbcTypeToPrestoType(ConnectorSession session, JdbcTypeHandle type)
     {
         int columnSize = type.getColumnSize();
         switch (type.getJdbcType()) {
@@ -336,7 +488,7 @@ public final class StandardColumnMappings
                 if (precision > Decimals.MAX_PRECISION) {
                     return Optional.empty();
                 }
-                return Optional.of(decimalColumnMapping(createDecimalType(precision, max(decimalDigits, 0))));
+                return Optional.of(decimalColumnMapping(createDecimalType(precision, max(decimalDigits, 0)), UNNECESSARY));
 
             case Types.CHAR:
             case Types.NCHAR:
@@ -362,10 +514,12 @@ public final class StandardColumnMappings
                 return Optional.of(dateColumnMapping());
 
             case Types.TIME:
-                return Optional.of(timeColumnMapping());
+                // TODO default to `timeColumnMapping`
+                return Optional.of(timeColumnMappingUsingSqlTime(session));
 
             case Types.TIMESTAMP:
-                return Optional.of(timestampColumnMapping());
+                // TODO default to `timestampColumnMapping`
+                return Optional.of(timestampColumnMappingUsingSqlTimestamp(session));
         }
         return Optional.empty();
     }

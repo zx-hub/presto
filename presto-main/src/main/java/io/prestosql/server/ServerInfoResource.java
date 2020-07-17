@@ -16,7 +16,8 @@ package io.prestosql.server;
 import io.airlift.node.NodeInfo;
 import io.prestosql.client.NodeVersion;
 import io.prestosql.client.ServerInfo;
-import io.prestosql.spi.NodeState;
+import io.prestosql.metadata.NodeState;
+import io.prestosql.server.security.ResourceSecurity;
 
 import javax.inject.Inject;
 import javax.ws.rs.Consumes;
@@ -33,8 +34,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.units.Duration.nanosSince;
-import static io.prestosql.spi.NodeState.ACTIVE;
-import static io.prestosql.spi.NodeState.SHUTTING_DOWN;
+import static io.prestosql.metadata.NodeState.ACTIVE;
+import static io.prestosql.metadata.NodeState.SHUTTING_DOWN;
+import static io.prestosql.server.security.ResourceSecurity.AccessType.MANAGEMENT_WRITE;
+import static io.prestosql.server.security.ResourceSecurity.AccessType.PUBLIC;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static javax.ws.rs.core.MediaType.APPLICATION_JSON;
@@ -60,6 +63,7 @@ public class ServerInfoResource
         this.shutdownHandler = requireNonNull(shutdownHandler, "shutdownHandler is null");
     }
 
+    @ResourceSecurity(PUBLIC)
     @GET
     @Produces(APPLICATION_JSON)
     public ServerInfo getInfo()
@@ -68,6 +72,7 @@ public class ServerInfoResource
         return new ServerInfo(version, environment, coordinator, starting, Optional.of(nanosSince(startTime)));
     }
 
+    @ResourceSecurity(MANAGEMENT_WRITE)
     @PUT
     @Path("state")
     @Consumes(APPLICATION_JSON)
@@ -95,6 +100,7 @@ public class ServerInfoResource
         }
     }
 
+    @ResourceSecurity(PUBLIC)
     @GET
     @Path("state")
     @Produces(APPLICATION_JSON)
@@ -108,6 +114,7 @@ public class ServerInfoResource
         }
     }
 
+    @ResourceSecurity(PUBLIC)
     @GET
     @Path("coordinator")
     @Produces(TEXT_PLAIN)

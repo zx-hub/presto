@@ -51,6 +51,7 @@ public class TestBasicQueryInfo
                         URI.create("1"),
                         ImmutableList.of("2", "3"),
                         "SELECT 4",
+                        Optional.empty(),
                         new QueryStats(
                                 DateTime.parse("1991-09-06T05:00-05:30"),
                                 DateTime.parse("1991-09-06T05:01-05:30"),
@@ -59,10 +60,10 @@ public class TestBasicQueryInfo
                                 Duration.valueOf("8m"),
                                 Duration.valueOf("7m"),
                                 Duration.valueOf("34m"),
+                                Duration.valueOf("35m"),
                                 Duration.valueOf("44m"),
                                 Duration.valueOf("9m"),
-                                Duration.valueOf("10m"),
-                                Duration.valueOf("11m"),
+                                Duration.valueOf("99s"),
                                 Duration.valueOf("12m"),
                                 13,
                                 14,
@@ -78,7 +79,11 @@ public class TestBasicQueryInfo
                                 DataSize.valueOf("23GB"),
                                 DataSize.valueOf("24GB"),
                                 DataSize.valueOf("25GB"),
+                                DataSize.valueOf("30GB"),
                                 DataSize.valueOf("26GB"),
+                                DataSize.valueOf("27GB"),
+                                DataSize.valueOf("28GB"),
+                                DataSize.valueOf("29GB"),
                                 true,
                                 Duration.valueOf("23m"),
                                 Duration.valueOf("24m"),
@@ -87,6 +92,7 @@ public class TestBasicQueryInfo
                                 ImmutableSet.of(BlockedReason.WAITING_FOR_MEMORY),
                                 DataSize.valueOf("271GB"),
                                 281,
+                                Duration.valueOf("20m"),
                                 DataSize.valueOf("272GB"),
                                 282,
                                 DataSize.valueOf("27GB"),
@@ -122,6 +128,8 @@ public class TestBasicQueryInfo
                         ImmutableList.of(),
                         ImmutableSet.of(),
                         Optional.empty(),
+                        ImmutableList.of(),
+                        ImmutableList.of(),
                         false,
                         Optional.empty()));
 
@@ -143,7 +151,8 @@ public class TestBasicQueryInfo
 
         assertEquals(basicInfo.getQueryStats().getCumulativeUserMemory(), 20.0);
         assertEquals(basicInfo.getQueryStats().getUserMemoryReservation(), DataSize.valueOf("21GB"));
-        assertEquals(basicInfo.getQueryStats().getPeakUserMemoryReservation(), DataSize.valueOf("23GB"));
+        assertEquals(basicInfo.getQueryStats().getTotalMemoryReservation(), DataSize.valueOf("23GB"));
+        assertEquals(basicInfo.getQueryStats().getPeakUserMemoryReservation(), DataSize.valueOf("24GB"));
         assertEquals(basicInfo.getQueryStats().getTotalCpuTime(), Duration.valueOf("24m"));
 
         assertEquals(basicInfo.getQueryStats().isFullyBlocked(), true);

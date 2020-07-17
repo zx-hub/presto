@@ -42,6 +42,7 @@ import io.prestosql.sql.relational.InputReferenceExpression;
 import io.prestosql.sql.relational.LambdaDefinitionExpression;
 import io.prestosql.sql.relational.RowExpression;
 import io.prestosql.sql.relational.RowExpressionVisitor;
+import io.prestosql.sql.relational.SpecialForm;
 import io.prestosql.sql.relational.VariableReferenceExpression;
 
 import java.util.List;
@@ -211,7 +212,7 @@ public class CursorProcessorCompiler
                     compiledLambdaMap.build(),
                     callSiteBinder,
                     cachedInstanceBinder,
-                    metadata.getFunctionRegistry());
+                    metadata);
             compiledLambdaMap.put(lambdaExpression, compiledLambda);
             counter++;
         }
@@ -239,7 +240,7 @@ public class CursorProcessorCompiler
                 callSiteBinder,
                 cachedInstanceBinder,
                 fieldReferenceCompiler(cursor),
-                metadata.getFunctionRegistry(),
+                metadata,
                 compiledLambdaMap);
 
         LabelNode end = new LabelNode("end");
@@ -279,7 +280,7 @@ public class CursorProcessorCompiler
                 callSiteBinder,
                 cachedInstanceBinder,
                 fieldReferenceCompiler(cursor),
-                metadata.getFunctionRegistry(),
+                metadata,
                 compiledLambdaMap);
 
         method.getBody()
@@ -294,7 +295,7 @@ public class CursorProcessorCompiler
 
     private static RowExpressionVisitor<BytecodeNode, Scope> fieldReferenceCompiler(Variable cursorVariable)
     {
-        return new RowExpressionVisitor<BytecodeNode, Scope>()
+        return new RowExpressionVisitor<>()
         {
             @Override
             public BytecodeNode visitInputReference(InputReferenceExpression node, Scope scope)
@@ -329,6 +330,12 @@ public class CursorProcessorCompiler
 
             @Override
             public BytecodeNode visitCall(CallExpression call, Scope scope)
+            {
+                throw new UnsupportedOperationException("not yet implemented");
+            }
+
+            @Override
+            public BytecodeNode visitSpecialForm(SpecialForm specialForm, Scope context)
             {
                 throw new UnsupportedOperationException("not yet implemented");
             }

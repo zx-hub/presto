@@ -16,7 +16,7 @@ package io.prestosql.orc.metadata;
 import io.prestosql.orc.OrcCorruptionException;
 import io.prestosql.orc.OrcDataSourceId;
 import io.prestosql.orc.metadata.PostScript.HiveWriterVersion;
-import io.prestosql.orc.metadata.statistics.HiveBloomFilter;
+import io.prestosql.orc.metadata.statistics.BloomFilter;
 import io.prestosql.spi.PrestoException;
 
 import java.io.IOException;
@@ -37,15 +37,15 @@ public class ExceptionWrappingMetadataReader
     {
         this.orcDataSourceId = requireNonNull(orcDataSourceId, "orcDataSourceId is null");
         this.delegate = requireNonNull(delegate, "delegate is null");
-        checkArgument(!(delegate instanceof ExceptionWrappingMetadataReader), "ExceptionWrappingMetadataReader can not wrap a ExceptionWrappingMetadataReader");
+        checkArgument(!(delegate instanceof ExceptionWrappingMetadataReader), "ExceptionWrappingMetadataReader cannot wrap a ExceptionWrappingMetadataReader");
     }
 
     @Override
-    public PostScript readPostScript(byte[] data, int offset, int length)
+    public PostScript readPostScript(InputStream inputStream)
             throws OrcCorruptionException
     {
         try {
-            return delegate.readPostScript(data, offset, length);
+            return delegate.readPostScript(inputStream);
         }
         catch (IOException | RuntimeException e) {
             throw propagate(e, "Invalid postscript");
@@ -77,7 +77,7 @@ public class ExceptionWrappingMetadataReader
     }
 
     @Override
-    public StripeFooter readStripeFooter(List<OrcType> types, InputStream inputStream)
+    public StripeFooter readStripeFooter(ColumnMetadata<OrcType> types, InputStream inputStream)
             throws IOException
     {
         try {
@@ -101,7 +101,7 @@ public class ExceptionWrappingMetadataReader
     }
 
     @Override
-    public List<HiveBloomFilter> readBloomFilterIndexes(InputStream inputStream)
+    public List<BloomFilter> readBloomFilterIndexes(InputStream inputStream)
             throws OrcCorruptionException
     {
         try {

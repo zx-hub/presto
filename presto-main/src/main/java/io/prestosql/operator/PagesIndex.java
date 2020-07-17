@@ -20,9 +20,7 @@ import io.airlift.slice.Slice;
 import io.airlift.units.DataSize;
 import io.prestosql.Session;
 import io.prestosql.geospatial.Rectangle;
-import io.prestosql.metadata.FunctionRegistry;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.metadata.MetadataManager;
 import io.prestosql.operator.SpatialIndexBuilderOperator.SpatialPredicate;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PageBuilder;
@@ -56,7 +54,7 @@ import java.util.stream.Stream;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.slice.SizeOf.sizeOf;
-import static io.airlift.units.DataSize.Unit.BYTE;
+import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
 import static io.prestosql.operator.SyntheticAddress.decodePosition;
 import static io.prestosql.operator.SyntheticAddress.decodeSliceIndex;
 import static io.prestosql.operator.SyntheticAddress.encodeSyntheticAddress;
@@ -79,8 +77,7 @@ public class PagesIndex
 
     private final OrderingCompiler orderingCompiler;
     private final JoinCompiler joinCompiler;
-    private final FunctionRegistry functionRegistry;
-    private final boolean groupByUsesEqualTo;
+    private final Metadata metadata;
 
     private final List<Type> types;
     private final LongArrayList valueAddresses;
@@ -95,21 +92,19 @@ public class PagesIndex
     private PagesIndex(
             OrderingCompiler orderingCompiler,
             JoinCompiler joinCompiler,
-            FunctionRegistry functionRegistry,
-            boolean groupByUsesEqualTo,
+            Metadata metadata,
             List<Type> types,
             int expectedPositions,
             boolean eagerCompact)
     {
         this.orderingCompiler = requireNonNull(orderingCompiler, "orderingCompiler is null");
         this.joinCompiler = requireNonNull(joinCompiler, "joinCompiler is null");
-        this.functionRegistry = requireNonNull(functionRegistry, "functionRegistry is null");
-        this.groupByUsesEqualTo = groupByUsesEqualTo;
+        this.metadata = requireNonNull(metadata, "metadata is null");
         this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
         this.valueAddresses = new LongArrayList(expectedPositions);
         this.eagerCompact = eagerCompact;
 
-        //noinspection rawtypes
+        //noinspection unchecked
         channels = (ObjectArrayList<Block>[]) new ObjectArrayList[types.size()];
         for (int i = 0; i < channels.length; i++) {
             channels[i] = ObjectArrayList.wrap(new Block[1024], 0);
@@ -127,8 +122,8 @@ public class PagesIndex
             implements Factory
     {
         private static final OrderingCompiler ORDERING_COMPILER = new OrderingCompiler();
-        private static final JoinCompiler JOIN_COMPILER = new JoinCompiler(MetadataManager.createTestMetadataManager(), new FeaturesConfig());
-        private final boolean groupByUsesEqualTo = new FeaturesConfig().isGroupByUsesEqualTo();
+        private static final Metadata METADATA = createTestMetadataManager();
+        private static final JoinCompiler JOIN_COMPILER = new JoinCompiler(METADATA);
         private final boolean eagerCompact;
 
         public TestingFactory(boolean eagerCompact)
@@ -139,7 +134,7 @@ public class PagesIndex
         @Override
         public PagesIndex newPagesIndex(List<Type> types, int expectedPositions)
         {
-            return new PagesIndex(ORDERING_COMPILER, JOIN_COMPILER, MetadataManager.createTestMetadataManager().getFunctionRegistry(), groupByUsesEqualTo, types, expectedPositions, eagerCompact);
+            return new PagesIndex(ORDERING_COMPILER, JOIN_COMPILER, METADATA, types, expectedPositions, eagerCompact);
         }
     }
 
@@ -149,8 +144,7 @@ public class PagesIndex
         private final OrderingCompiler orderingCompiler;
         private final JoinCompiler joinCompiler;
         private final boolean eagerCompact;
-        private final FunctionRegistry functionRegistry;
-        private final boolean groupByUsesEqualTo;
+        private final Metadata metadata;
 
         @Inject
         public DefaultFactory(OrderingCompiler orderingCompiler, JoinCompiler joinCompiler, FeaturesConfig featuresConfig, Metadata metadata)
@@ -158,14 +152,13 @@ public class PagesIndex
             this.orderingCompiler = requireNonNull(orderingCompiler, "orderingCompiler is null");
             this.joinCompiler = requireNonNull(joinCompiler, "joinCompiler is null");
             this.eagerCompact = requireNonNull(featuresConfig, "featuresConfig is null").isPagesIndexEagerCompactionEnabled();
-            this.functionRegistry = requireNonNull(metadata, "metadata is null").getFunctionRegistry();
-            this.groupByUsesEqualTo = featuresConfig.isGroupByUsesEqualTo();
+            this.metadata = requireNonNull(metadata, "metadata is null");
         }
 
         @Override
         public PagesIndex newPagesIndex(List<Type> types, int expectedPositions)
         {
-            return new PagesIndex(orderingCompiler, joinCompiler, functionRegistry, groupByUsesEqualTo, types, expectedPositions, eagerCompact);
+            return new PagesIndex(orderingCompiler, joinCompiler, metadata, types, expectedPositions, eagerCompact);
         }
     }
 
@@ -232,7 +225,7 @@ public class PagesIndex
 
     public DataSize getEstimatedSize()
     {
-        return new DataSize(estimatedSize, BYTE);
+        return DataSize.ofBytes(estimatedSize);
     }
 
     public void compact()
@@ -441,8 +434,7 @@ public class PagesIndex
                 joinChannels,
                 hashChannel,
                 Optional.empty(),
-                functionRegistry,
-                groupByUsesEqualTo);
+                metadata);
     }
 
     public LookupSourceSupplier createLookupSourceSupplier(
@@ -510,8 +502,7 @@ public class PagesIndex
                 joinChannels,
                 hashChannel,
                 sortChannel,
-                functionRegistry,
-                groupByUsesEqualTo);
+                metadata);
 
         return new JoinHashSupplier(
                 session,
@@ -542,7 +533,7 @@ public class PagesIndex
 
     public Iterator<Page> getPages()
     {
-        return new AbstractIterator<Page>()
+        return new AbstractIterator<>()
         {
             private int pageCounter;
 
@@ -564,7 +555,7 @@ public class PagesIndex
 
     public Iterator<Page> getSortedPages()
     {
-        return new AbstractIterator<Page>()
+        return new AbstractIterator<>()
         {
             private int currentPosition;
             private final PageBuilder pageBuilder = new PageBuilder(types);

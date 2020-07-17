@@ -14,23 +14,27 @@
 package io.prestosql.execution;
 
 import com.google.common.collect.ImmutableMap;
-import io.airlift.configuration.testing.ConfigAssertions;
 import io.airlift.units.Duration;
 import org.testng.annotations.Test;
 
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+import static io.airlift.configuration.testing.ConfigAssertions.assertFullMapping;
+import static io.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
+import static io.airlift.configuration.testing.ConfigAssertions.recordDefaults;
+
 public class TestQueryManagerConfig
 {
     @Test
     public void testDefaults()
     {
-        ConfigAssertions.assertRecordedDefaults(ConfigAssertions.recordDefaults(QueryManagerConfig.class)
+        assertRecordedDefaults(recordDefaults(QueryManagerConfig.class)
                 .setMinQueryExpireAge(new Duration(15, TimeUnit.MINUTES))
                 .setMaxQueryHistory(100)
                 .setMaxQueryLength(1_000_000)
                 .setMaxStageCount(100)
+                .setStageCountWarningThreshold(50)
                 .setClientTimeout(new Duration(5, TimeUnit.MINUTES))
                 .setScheduleSplitBatchSize(1000)
                 .setMinScheduleSplitBatchSize(100)
@@ -45,8 +49,6 @@ public class TestQueryManagerConfig
                 .setQueryMaxRunTime(new Duration(100, TimeUnit.DAYS))
                 .setQueryMaxExecutionTime(new Duration(100, TimeUnit.DAYS))
                 .setQueryMaxCpuTime(new Duration(1_000_000_000, TimeUnit.DAYS))
-                .setInitializationRequiredWorkers(1)
-                .setInitializationTimeout(new Duration(5, TimeUnit.MINUTES))
                 .setRequiredWorkers(1)
                 .setRequiredWorkersMaxWait(new Duration(5, TimeUnit.MINUTES)));
     }
@@ -60,6 +62,7 @@ public class TestQueryManagerConfig
                 .put("query.max-history", "10")
                 .put("query.max-length", "10000")
                 .put("query.max-stage-count", "12345")
+                .put("query.stage-count-warning-threshold", "12300")
                 .put("query.schedule-split-batch-size", "99")
                 .put("query.min-schedule-split-batch-size", "9")
                 .put("query.max-concurrent-queries", "10")
@@ -73,8 +76,6 @@ public class TestQueryManagerConfig
                 .put("query.max-run-time", "2h")
                 .put("query.max-execution-time", "3h")
                 .put("query.max-cpu-time", "2d")
-                .put("query-manager.initialization-required-workers", "200")
-                .put("query-manager.initialization-timeout", "1m")
                 .put("query-manager.required-workers", "333")
                 .put("query-manager.required-workers-max-wait", "33m")
                 .build();
@@ -84,6 +85,7 @@ public class TestQueryManagerConfig
                 .setMaxQueryHistory(10)
                 .setMaxQueryLength(10000)
                 .setMaxStageCount(12345)
+                .setStageCountWarningThreshold(12300)
                 .setClientTimeout(new Duration(10, TimeUnit.SECONDS))
                 .setScheduleSplitBatchSize(99)
                 .setMinScheduleSplitBatchSize(9)
@@ -98,11 +100,9 @@ public class TestQueryManagerConfig
                 .setQueryMaxRunTime(new Duration(2, TimeUnit.HOURS))
                 .setQueryMaxExecutionTime(new Duration(3, TimeUnit.HOURS))
                 .setQueryMaxCpuTime(new Duration(2, TimeUnit.DAYS))
-                .setInitializationRequiredWorkers(200)
-                .setInitializationTimeout(new Duration(1, TimeUnit.MINUTES))
                 .setRequiredWorkers(333)
                 .setRequiredWorkersMaxWait(new Duration(33, TimeUnit.MINUTES));
 
-        ConfigAssertions.assertFullMapping(properties, expected);
+        assertFullMapping(properties, expected);
     }
 }

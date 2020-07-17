@@ -15,12 +15,14 @@ package io.prestosql.orc.writer;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.primitives.SignedBytes;
 import io.airlift.slice.Slice;
 import io.prestosql.orc.checkpoint.BooleanStreamCheckpoint;
 import io.prestosql.orc.checkpoint.ByteStreamCheckpoint;
 import io.prestosql.orc.metadata.ColumnEncoding;
 import io.prestosql.orc.metadata.CompressedMetadataWriter;
 import io.prestosql.orc.metadata.CompressionKind;
+import io.prestosql.orc.metadata.OrcColumnId;
 import io.prestosql.orc.metadata.RowGroupIndex;
 import io.prestosql.orc.metadata.Stream;
 import io.prestosql.orc.metadata.Stream.StreamKind;
@@ -50,7 +52,7 @@ public class ByteColumnWriter
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(ByteColumnWriter.class).instanceSize();
     private static final ColumnEncoding COLUMN_ENCODING = new ColumnEncoding(DIRECT, 0);
 
-    private final int column;
+    private final OrcColumnId columnId;
     private final Type type;
     private final boolean compressed;
     private final ByteOutputStream dataStream;
@@ -62,10 +64,9 @@ public class ByteColumnWriter
 
     private boolean closed;
 
-    public ByteColumnWriter(int column, Type type, CompressionKind compression, int bufferSize)
+    public ByteColumnWriter(OrcColumnId columnId, Type type, CompressionKind compression, int bufferSize)
     {
-        checkArgument(column >= 0, "column is negative");
-        this.column = column;
+        this.columnId = requireNonNull(columnId, "columnId is null");
         this.type = requireNonNull(type, "type is null");
         this.compressed = requireNonNull(compression, "compression is null") != NONE;
         this.dataStream = new ByteOutputStream(compression, bufferSize);
@@ -73,9 +74,9 @@ public class ByteColumnWriter
     }
 
     @Override
-    public Map<Integer, ColumnEncoding> getColumnEncodings()
+    public Map<OrcColumnId, ColumnEncoding> getColumnEncodings()
     {
-        return ImmutableMap.of(column, COLUMN_ENCODING);
+        return ImmutableMap.of(columnId, COLUMN_ENCODING);
     }
 
     @Override
@@ -99,20 +100,20 @@ public class ByteColumnWriter
         // record values
         for (int position = 0; position < block.getPositionCount(); position++) {
             if (!block.isNull(position)) {
-                dataStream.writeByte((byte) type.getLong(block, position));
+                dataStream.writeByte(SignedBytes.checkedCast(type.getLong(block, position)));
                 nonNullValueCount++;
             }
         }
     }
 
     @Override
-    public Map<Integer, ColumnStatistics> finishRowGroup()
+    public Map<OrcColumnId, ColumnStatistics> finishRowGroup()
     {
         checkState(!closed);
         ColumnStatistics statistics = new ColumnStatistics((long) nonNullValueCount, 0, null, null, null, null, null, null, null, null);
         rowGroupColumnStatistics.add(statistics);
         nonNullValueCount = 0;
-        return ImmutableMap.of(column, statistics);
+        return ImmutableMap.of(columnId, statistics);
     }
 
     @Override
@@ -124,10 +125,10 @@ public class ByteColumnWriter
     }
 
     @Override
-    public Map<Integer, ColumnStatistics> getColumnStripeStatistics()
+    public Map<OrcColumnId, ColumnStatistics> getColumnStripeStatistics()
     {
         checkState(closed);
-        return ImmutableMap.of(column, ColumnStatistics.mergeColumnStatistics(rowGroupColumnStatistics));
+        return ImmutableMap.of(columnId, ColumnStatistics.mergeColumnStatistics(rowGroupColumnStatistics));
     }
 
     @Override
@@ -150,7 +151,7 @@ public class ByteColumnWriter
         }
 
         Slice slice = metadataWriter.writeRowIndexes(rowGroupIndexes.build());
-        Stream stream = new Stream(column, StreamKind.ROW_INDEX, slice.length(), false);
+        Stream stream = new Stream(columnId, StreamKind.ROW_INDEX, slice.length(), false);
         return ImmutableList.of(new StreamDataOutput(slice, stream));
     }
 
@@ -171,8 +172,8 @@ public class ByteColumnWriter
         checkState(closed);
 
         ImmutableList.Builder<StreamDataOutput> outputDataStreams = ImmutableList.builder();
-        presentStream.getStreamDataOutput(column).ifPresent(outputDataStreams::add);
-        outputDataStreams.add(dataStream.getStreamDataOutput(column));
+        presentStream.getStreamDataOutput(columnId).ifPresent(outputDataStreams::add);
+        outputDataStreams.add(dataStream.getStreamDataOutput(columnId));
         return outputDataStreams.build();
     }
 

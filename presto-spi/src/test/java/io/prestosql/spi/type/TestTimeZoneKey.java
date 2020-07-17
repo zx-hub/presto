@@ -19,11 +19,11 @@ import com.google.common.hash.Hashing;
 import org.testng.annotations.Test;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Comparator;
 import java.util.SortedSet;
 
 import static io.prestosql.spi.type.TimeZoneKey.MAX_TIME_ZONE_KEY;
 import static io.prestosql.spi.type.TimeZoneKey.UTC_KEY;
+import static java.util.Comparator.comparingInt;
 import static java.util.Locale.ENGLISH;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
@@ -199,21 +199,14 @@ public class TestTimeZoneKey
     {
         Hasher hasher = Hashing.murmur3_128().newHasher();
 
-        SortedSet<TimeZoneKey> timeZoneKeysSortedByKey = ImmutableSortedSet.copyOf(new Comparator<TimeZoneKey>()
-        {
-            @Override
-            public int compare(TimeZoneKey left, TimeZoneKey right)
-            {
-                return Short.compare(left.getKey(), right.getKey());
-            }
-        }, TimeZoneKey.getTimeZoneKeys());
+        SortedSet<TimeZoneKey> timeZoneKeysSortedByKey = ImmutableSortedSet.copyOf(comparingInt(TimeZoneKey::getKey), TimeZoneKey.getTimeZoneKeys());
 
         for (TimeZoneKey timeZoneKey : timeZoneKeysSortedByKey) {
             hasher.putShort(timeZoneKey.getKey());
             hasher.putString(timeZoneKey.getId(), StandardCharsets.UTF_8);
         }
         // Zone file should not (normally) be changed, so let's make this more difficult
-        assertEquals(hasher.hash().asLong(), -4582158485614614451L, "zone-index.properties file contents changed!");
+        assertEquals(hasher.hash().asLong(), -3809591333307967388L, "zone-index.properties file contents changed!");
     }
 
     public void assertTimeZoneNotSupported(String zoneId)
